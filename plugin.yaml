@@ -1,0 +1,116 @@
+# 本文件由 backend/cmd/genmanifest 自动生成，请勿手工修改。
+
+id: gateway-anthropic
+name: Anthropic 网关
+version: 1.0.0
+description: Anthropic Claude Messages API 转发
+author: airgate
+type: gateway
+min_core_version: 1.0.0
+dependencies: []
+frontend_widgets:
+  - slot: account-form
+    entry_file: index.js
+    title: 账号表单
+gateway:
+  platform: anthropic
+  mode: simple
+  routes:
+    - method: POST
+      path: /v1/messages
+      description: Messages API
+    - method: POST
+      path: /v1/messages/count_tokens
+      description: Token 计数
+    - method: GET
+      path: /v1/models
+      description: 模型列表
+  models:
+    - id: claude-haiku-4-5-20251001
+      name: Claude Haiku 4.5
+      max_tokens: 200000
+      input_price: 0.8
+      output_price: 4
+      cache_price: 0.08
+    - id: claude-opus-4-5-20251101
+      name: Claude Opus 4.5
+      max_tokens: 200000
+      input_price: 15
+      output_price: 75
+      cache_price: 1.5
+    - id: claude-opus-4-6
+      name: Claude Opus 4.6
+      max_tokens: 200000
+      input_price: 15
+      output_price: 75
+      cache_price: 1.5
+    - id: claude-sonnet-4-5-20250929
+      name: Claude Sonnet 4.5
+      max_tokens: 200000
+      input_price: 3
+      output_price: 15
+      cache_price: 0.3
+    - id: claude-sonnet-4-6
+      name: Claude Sonnet 4.6
+      max_tokens: 200000
+      input_price: 3
+      output_price: 15
+      cache_price: 0.3
+  account_types:
+    - key: apikey
+      label: API Key
+      description: 使用 Anthropic API Key 直接访问
+      fields:
+        - key: api_key
+          label: API Key
+          type: password
+          required: true
+          placeholder: sk-ant-...
+        - key: base_url
+          label: API 地址
+          type: text
+          required: false
+          placeholder: https://api.anthropic.com
+    - key: oauth
+      label: OAuth 令牌
+      description: 使用 OAuth Access Token 访问（通过 Session Key 自动获取）
+      fields:
+        - key: access_token
+          label: Access Token
+          type: password
+          required: false
+          placeholder: 自动获取
+        - key: refresh_token
+          label: Refresh Token
+          type: password
+          required: false
+          placeholder: 自动获取
+        - key: expires_at
+          label: 过期时间
+          type: text
+          required: false
+          placeholder: 自动填充
+    - key: session_key
+      label: Session Key
+      description: 使用 claude.ai 的 Session Key 自动获取 OAuth 令牌
+      fields:
+        - key: session_key
+          label: Session Key
+          type: password
+          required: true
+          placeholder: sk-ant-sid01-...
+        - key: access_token
+          label: Access Token
+          type: password
+          required: false
+          placeholder: 自动获取
+        - key: refresh_token
+          label: Refresh Token
+          type: password
+          required: false
+          placeholder: 自动获取
+        - key: expires_at
+          label: 过期时间
+          type: text
+          required: false
+          placeholder: 自动填充

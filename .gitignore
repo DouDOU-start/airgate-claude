@@ -1,0 +1,12 @@
+# Dependencies
+web/node_modules/
+
+# Build output
+backend/backend
+web/dist/
+backend/internal/gateway/webdist/index.js
+
+# IDE
+.idea/
+.vscode/
+*.swp
