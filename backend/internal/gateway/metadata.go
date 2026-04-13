@@ -12,7 +12,7 @@ const (
 	PluginDisplayName    = "Claude 网关"
 	PluginDescription    = "Claude Messages API 网关"
 	PluginAuthor         = "airgate"
-	PluginPlatform       = "anthropic"
+	PluginPlatform       = "claude"
 	PluginMode           = "simple"
 	PluginMinCoreVersion = "1.0.0"
 )
