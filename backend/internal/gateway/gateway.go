@@ -265,6 +265,11 @@ func (g *AnthropicGateway) HandleRequest(ctx context.Context, _, path, _ string,
 		var accountName string
 		if tokenResp.Account != nil {
 			accountName = tokenResp.Account.EmailAddress
+			credentials["email"] = tokenResp.Account.EmailAddress
+			credentials["account_uuid"] = tokenResp.Account.UUID
+		}
+		if tokenResp.Organization != nil {
+			credentials["org_uuid"] = tokenResp.Organization.UUID
 		}
 
 		return http.StatusOK, nil, jsonMarshal(map[string]any{
@@ -394,6 +399,11 @@ func (g *AnthropicGateway) HandleRequest(ctx context.Context, _, path, _ string,
 		var accountName string
 		if tokenResp.Account != nil {
 			accountName = tokenResp.Account.EmailAddress
+			credentials["email"] = tokenResp.Account.EmailAddress
+			credentials["account_uuid"] = tokenResp.Account.UUID
+		}
+		if tokenResp.Organization != nil {
+			credentials["org_uuid"] = tokenResp.Organization.UUID
 		}
 
 		return http.StatusOK, nil, jsonMarshal(map[string]any{
