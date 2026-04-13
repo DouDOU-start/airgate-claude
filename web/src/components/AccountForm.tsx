@@ -138,7 +138,8 @@ function StatusMessage({ status }: { status: { type: 'info' | 'success' | 'error
 export function AccountForm({
   credentials,
   onChange,
-  mode,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  mode: _mode,
   accountType: propType,
   onAccountTypeChange,
   onSuggestedName,
@@ -456,7 +457,7 @@ export function AccountForm({
             </div>
           )}
 
-          {/* ── Token 字段（自动填充或手动输入） ── */}
+          {/* ── Token 字段 ── */}
           {credentials.access_token ? (
             <>
               <div>
@@ -473,30 +474,9 @@ export function AccountForm({
               </div>
             </>
           ) : (
-            mode === 'edit' && (
-              <>
-                <div>
-                  <label style={labelStyle}>Access Token</label>
-                  <input
-                    type="password"
-                    style={inputStyle}
-                    placeholder="手动输入或通过上方获取"
-                    value={credentials.access_token ?? ''}
-                    onChange={(e) => updateField('access_token', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label style={labelStyle}>Refresh Token</label>
-                  <input
-                    type="password"
-                    style={inputStyle}
-                    placeholder="手动输入"
-                    value={credentials.refresh_token ?? ''}
-                    onChange={(e) => updateField('refresh_token', e.target.value)}
-                  />
-                </div>
-              </>
-            )
+            <div style={{ ...descStyle, color: cssVar('textSecondary'), padding: '0.5rem 0' }}>
+              通过上方 Session Key 或浏览器授权获取 Token
+            </div>
           )}
 
           {/* ── Base URL ── */}
