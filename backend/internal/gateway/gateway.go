@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -19,20 +18,13 @@ import (
 	sdk "github.com/DouDOU-start/airgate-sdk"
 )
 
-// usageCacheEntry 用量缓存条目
-type usageCacheEntry struct {
-	data      *UsageResponse
-	fetchedAt time.Time
-}
-
 // AnthropicGateway Claude 网关插件
 type AnthropicGateway struct {
-	logger     *slog.Logger
-	ctx        sdk.PluginContext
-	tokenMgr   *tokenManager
-	stdPool    *StandardTransportPool
-	fpPool     *FingerprintTransportPool
-	usageCache sync.Map // accountID (string) -> *usageCacheEntry
+	logger   *slog.Logger
+	ctx      sdk.PluginContext
+	tokenMgr *tokenManager
+	stdPool  *StandardTransportPool
+	fpPool   *FingerprintTransportPool
 }
 
 func (g *AnthropicGateway) Info() sdk.PluginInfo {
@@ -315,7 +307,7 @@ func (g *AnthropicGateway) HandleRequest(ctx context.Context, _, path, _ string,
 				continue
 			}
 
-			usageResp, err := g.fetchUsageWithCache(ctx, strconv.FormatInt(a.ID, 10), accessToken, a.Credentials["proxy_url"])
+			usageResp, err := g.fetchUsage(ctx, accessToken, a.Credentials["proxy_url"])
 			if err != nil {
 				resp.Errors = append(resp.Errors, sdk.AccountUsageError{
 					ID:      a.ID,
@@ -463,30 +455,7 @@ type UsageResponse struct {
 	} `json:"seven_day_sonnet"`
 }
 
-const usageCacheTTL = 3 * time.Minute // 用量缓存 3 分钟（参考 sub2api）
-
-// fetchUsageWithCache 带缓存的用量查询，同一 token 3 分钟内不重复请求
-func (g *AnthropicGateway) fetchUsageWithCache(ctx context.Context, accountID string, accessToken, proxyURL string) (*UsageResponse, error) {
-	// 检查缓存
-	if val, ok := g.usageCache.Load(accountID); ok {
-		entry := val.(*usageCacheEntry)
-		if time.Since(entry.fetchedAt) < usageCacheTTL {
-			return entry.data, nil
-		}
-	}
-
-	// 缓存过期或不存在，发起请求
-	resp, err := g.fetchUsage(ctx, accessToken, proxyURL)
-	if err != nil {
-		return nil, err
-	}
-
-	// 写入缓存
-	g.usageCache.Store(accountID, &usageCacheEntry{data: resp, fetchedAt: time.Now()})
-	return resp, nil
-}
-
-// fetchUsage 从 Anthropic API 获取 OAuth 账号用量（无缓存）
+// fetchUsage 从 Anthropic API 获取 OAuth 账号用量
 func (g *AnthropicGateway) fetchUsage(ctx context.Context, accessToken, proxyURL string) (*UsageResponse, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, usageAPIURL, nil)
 	if err != nil {
