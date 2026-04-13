@@ -4,10 +4,12 @@ import sdk "github.com/DouDOU-start/airgate-sdk"
 
 //go:generate go run ../../cmd/genmanifest
 
+// PluginVersion 版本号（release 时由 -ldflags 注入 git tag）
+var PluginVersion = "1.0.0"
+
 const (
 	PluginID             = "gateway-anthropic"
 	PluginDisplayName    = "Claude 网关"
-	PluginVersion        = "1.0.0"
 	PluginDescription    = "Claude Messages API 网关"
 	PluginAuthor         = "airgate"
 	PluginPlatform       = "anthropic"
