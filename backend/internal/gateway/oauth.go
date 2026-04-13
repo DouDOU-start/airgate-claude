@@ -306,11 +306,6 @@ func (g *AnthropicGateway) getOrganizationUUID(ctx context.Context, client *req.
 	return orgs[0].UUID, nil
 }
 
-// getAuthorizationCode 获取 OAuth 授权码（默认 API scope）
-func (g *AnthropicGateway) getAuthorizationCode(ctx context.Context, client *req.Client, sessionKey, orgUUID, codeChallenge, state string) (string, error) {
-	return g.getAuthorizationCodeWithScope(ctx, client, sessionKey, orgUUID, codeChallenge, state, OAuthScopeAPI)
-}
-
 // getAuthorizationCodeWithScope 获取 OAuth 授权码（使用 req/v3 Chrome 指纹）
 func (g *AnthropicGateway) getAuthorizationCodeWithScope(ctx context.Context, client *req.Client, sessionKey, orgUUID, codeChallenge, state, scope string) (string, error) {
 	authURL := fmt.Sprintf("%s/v1/oauth/%s/authorize", claudeAIBaseURL, orgUUID)

@@ -234,7 +234,7 @@ func dialThroughProxy(ctx context.Context, proxyURL string, targetAddr string, d
 		_ = conn.Close()
 		return nil, fmt.Errorf("read proxy response: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		_ = conn.Close()

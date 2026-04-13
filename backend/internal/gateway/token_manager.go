@@ -89,7 +89,7 @@ func (m *tokenManager) ensureValidToken(ctx context.Context, account *sdk.Accoun
 func (m *tokenManager) ensureSessionKeyExchange(ctx context.Context, account *sdk.Account) (map[string]string, error) {
 	sessionKey := account.Credentials["session_key"]
 	if sessionKey == "" {
-		return nil, fmt.Errorf("Session Key 账号缺少 session_key")
+		return nil, fmt.Errorf("session key 账号缺少 session_key")
 	}
 
 	state := m.getState(account.ID)
@@ -105,7 +105,7 @@ func (m *tokenManager) ensureSessionKeyExchange(ctx context.Context, account *sd
 
 	tokenResp, err := m.gateway.ExchangeSessionKeyForToken(ctx, sessionKey, account.ProxyURL)
 	if err != nil {
-		return nil, fmt.Errorf("Session Key 换取 token 失败: %w", err)
+		return nil, fmt.Errorf("session key 换取 token 失败: %w", err)
 	}
 
 	expiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339)

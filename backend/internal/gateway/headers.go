@@ -202,22 +202,3 @@ func mergeBetas(base, extra string) string {
 	return strings.Join(parts, ",")
 }
 
-// anthropicAllowedHeaders 允许透传的请求头白名单
-var anthropicAllowedHeaders = map[string]bool{
-	"anthropic-version": true,
-	"anthropic-beta":    true,
-	"accept-language":   true,
-	"x-request-id":      true,
-}
-
-// passAnthropicHeaders 透传白名单中的客户端头（认证头由 setAnthropicAuthHeaders 处理）
-func passAnthropicHeaders(src, dst http.Header) {
-	for key, values := range src {
-		lowerKey := strings.ToLower(key)
-		if anthropicAllowedHeaders[lowerKey] {
-			for _, v := range values {
-				dst.Add(key, v)
-			}
-		}
-	}
-}

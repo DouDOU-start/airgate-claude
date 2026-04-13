@@ -13,8 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tidwall/gjson"
-
 	sdk "github.com/DouDOU-start/airgate-sdk"
 )
 
@@ -498,33 +496,6 @@ func (g *AnthropicGateway) fetchUsage(ctx context.Context, accessToken, proxyURL
 // 工具函数
 // ──────────────────────────────────────────────────────
 
-func trimTrailingSlash(s string) string {
-	for len(s) > 0 && s[len(s)-1] == '/' {
-		s = s[:len(s)-1]
-	}
-	return s
-}
-
-// extractUsageFromBody 从响应 body 中提取 usage（非流式响应使用）
-func extractUsageFromBody(body []byte) (inputTokens, outputTokens, cacheTokens int) {
-	inputTokens = int(gjson.GetBytes(body, "usage.input_tokens").Int())
-	outputTokens = int(gjson.GetBytes(body, "usage.output_tokens").Int())
-	cacheTokens = int(gjson.GetBytes(body, "usage.cache_read_input_tokens").Int())
-	return
-}
-
-// validateForwardRequest 验证请求基本参数（前置检查）
-func validateForwardRequest(body []byte) error {
-	if len(body) == 0 {
-		return nil
-	}
-	model := gjson.GetBytes(body, "model").String()
-	if model == "" {
-		return fmt.Errorf("请求体缺少 model 字段")
-	}
-	return nil
-}
-
 // buildCountTokensHeaders 为 count_tokens 请求构建特殊的 beta header
 func buildCountTokensHeaders(req *http.Request, account *sdk.Account) {
 	switch account.Type {
@@ -550,11 +521,6 @@ func buildCountTokensHeaders(req *http.Request, account *sdk.Account) {
 	setRawHeader(req.Header, "content-type", "application/json")
 }
 
-// isCountTokensRequest 检查是否为 count_tokens 请求
-func isCountTokensRequest(req *sdk.ForwardRequest) bool {
-	path := req.Headers.Get("X-Original-Path")
-	return path == "/v1/messages/count_tokens"
-}
 
 // forwardCountTokens 转发 count_tokens 请求
 func (g *AnthropicGateway) forwardCountTokens(ctx context.Context, req *sdk.ForwardRequest) (*sdk.ForwardResult, error) {
