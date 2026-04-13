@@ -16,97 +16,85 @@ import (
 )
 
 // ──────────────────────────────────────────────────────
-// Claude CLI TLS 指纹配置
-// JA3: 1a28e69016765d92e3b381168d68922c
-// 模拟 Claude CLI 2.x / Node.js 20.x + OpenSSL 3.x
+// Node.js 24.x / Claude Code TLS 指纹配置
+// 移植自 sub2api tlsfingerprint/dialer.go
+// JA3: 44f88fca027f27bab4bb08d4af15f23e
+// JA4: t13d1714h1_5b57614c22b0_7baf387fc6ff
 // ──────────────────────────────────────────────────────
 
-// defaultCipherSuites Claude CLI 的密码套件列表（59 个，顺序重要）
+// defaultCipherSuites Node.js 24.x 的 17 个 cipher suites（顺序关键）
 var defaultCipherSuites = []uint16{
-	utls.GREASE_PLACEHOLDER, // GREASE
 	// TLS 1.3
-	0x1302, 0x1303, 0x1301,
-	// ECDHE+AES-GCM
-	0xc02f, 0xc02b, 0xc030, 0xc02c,
-	// DHE+AES-GCM
-	0x009e,
-	// ECDHE/DHE+AES-CBC-SHA256/384
-	0xc027, 0x0067, 0xc028, 0x006b,
-	// DHE-DSS/RSA+AES-GCM
-	0x00a3, 0x009f,
-	// ChaCha20-Poly1305
-	0xcca9, 0xcca8, 0xccaa,
-	// AES-CCM
-	0xc0af, 0xc0ad, 0xc0a3, 0xc09f, 0xc0ae, 0xc0ac, 0xc0a2, 0xc09e,
-	// ARIA
-	0xc05d, 0xc061, 0xc057, 0xc053, 0xc05c, 0xc060, 0xc056, 0xc052,
-	// DHE-DSS+AES-GCM
-	0x00a2,
-	// ECDHE/DHE+AES-CBC-SHA384/256
-	0xc024, 0x006a, 0xc023, 0x0040,
-	// Legacy ECDHE/DHE+AES-CBC-SHA
-	0xc00a, 0xc014, 0x0039, 0x0038, 0xc009, 0xc013, 0x0033, 0x0032,
-	// RSA suites (256-bit)
-	0x009d, 0xc0a1, 0xc09d, 0xc051,
-	// RSA suites (128-bit)
-	0x009c, 0xc0a0, 0xc09c, 0xc050,
-	// Legacy RSA+AES-CBC
-	0x003d, 0x003c, 0x0035, 0x002f,
-	// SCSV
-	0x00ff,
+	0x1301, // TLS_AES_128_GCM_SHA256
+	0x1302, // TLS_AES_256_GCM_SHA384
+	0x1303, // TLS_CHACHA20_POLY1305_SHA256
+	// ECDHE + AES-GCM
+	0xc02b, // TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+	0xc02f, // TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+	0xc02c, // TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+	0xc030, // TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+	// ECDHE + ChaCha20-Poly1305
+	0xcca9, // TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+	0xcca8, // TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+	// ECDHE + AES-CBC-SHA (legacy)
+	0xc009, // TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA
+	0xc013, // TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA
+	0xc00a, // TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA
+	0xc014, // TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA
+	// RSA + AES-GCM (non-PFS)
+	0x009c, // TLS_RSA_WITH_AES_128_GCM_SHA256
+	0x009d, // TLS_RSA_WITH_AES_256_GCM_SHA384
+	// RSA + AES-CBC-SHA (non-PFS, legacy)
+	0x002f, // TLS_RSA_WITH_AES_128_CBC_SHA
+	0x0035, // TLS_RSA_WITH_AES_256_CBC_SHA
 }
 
-// defaultCurves 椭圆曲线列表
+// defaultCurves Node.js 24.x 仅 3 条曲线
 var defaultCurves = []utls.CurveID{
 	utls.X25519,    // 0x001d
 	utls.CurveP256, // 0x0017
-	0x001e,         // x448
-	utls.CurveP521, // 0x0019
 	utls.CurveP384, // 0x0018
-	0x0100,         // ffdhe2048
-	0x0101,         // ffdhe3072
-	0x0102,         // ffdhe4096
-	0x0103,         // ffdhe6144
-	0x0104,         // ffdhe8192
-	utls.GREASE_PLACEHOLDER, // GREASE
 }
 
-// defaultPointFormats EC 点格式
-var defaultPointFormats = []uint8{0, 1, 2} // uncompressed, compressed_prime, compressed_char2
-
-// defaultSignatureAlgorithms 签名算法列表
+// defaultSignatureAlgorithms Node.js 24.x 的 9 个签名算法
 var defaultSignatureAlgorithms = []utls.SignatureScheme{
-	0x0403, 0x0503, 0x0603,
-	0x0807, 0x0808, 0x0809, 0x080a, 0x080b,
-	0x0804, 0x0805, 0x0806,
-	0x0401, 0x0501, 0x0601,
-	0x0303, 0x0301, 0x0302,
-	0x0402, 0x0502, 0x0602,
+	0x0403, // ecdsa_secp256r1_sha256
+	0x0804, // rsa_pss_rsae_sha256
+	0x0401, // rsa_pkcs1_sha256
+	0x0503, // ecdsa_secp384r1_sha384
+	0x0805, // rsa_pss_rsae_sha384
+	0x0501, // rsa_pkcs1_sha384
+	0x0806, // rsa_pss_rsae_sha512
+	0x0601, // rsa_pkcs1_sha512
+	0x0201, // rsa_pkcs1_sha1
 }
 
-// buildClientHelloSpec 构建模拟 Claude CLI 的 ClientHello 规格
+// buildClientHelloSpec 构建 Node.js 24.x 的 ClientHello
 func buildClientHelloSpec() *utls.ClientHelloSpec {
+	// Node.js 24.x extension 顺序
+	extensions := []utls.TLSExtension{
+		&utls.SNIExtension{},                                                                       // 0: server_name
+		&utls.GREASEEncryptedClientHelloExtension{},                                                // 65037: ECH (GREASE)
+		&utls.ExtendedMasterSecretExtension{},                                                      // 23: extended_master_secret
+		&utls.RenegotiationInfoExtension{},                                                         // 65281: renegotiation_info
+		&utls.SupportedCurvesExtension{Curves: defaultCurves},                                      // 10: supported_groups
+		&utls.SupportedPointsExtension{SupportedPoints: []uint8{0}},                                // 11: ec_point_formats (uncompressed only)
+		&utls.SessionTicketExtension{},                                                             // 35: session_ticket
+		&utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}},                                  // 16: alpn
+		&utls.StatusRequestExtension{},                                                             // 5: status_request (OCSP)
+		&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: defaultSignatureAlgorithms}, // 13: signature_algorithms
+		&utls.SCTExtension{},                                                                       // 18: signed_certificate_timestamp
+		&utls.KeyShareExtension{KeyShares: []utls.KeyShare{{Group: utls.X25519}}},                  // 51: key_share
+		&utls.PSKKeyExchangeModesExtension{Modes: []uint8{uint8(utls.PskModeDHE)}},                // 45: psk_key_exchange_modes
+		&utls.SupportedVersionsExtension{Versions: []uint16{utls.VersionTLS13, utls.VersionTLS12}}, // 43: supported_versions
+	}
+
 	return &utls.ClientHelloSpec{
-		TLSVersMax: utls.VersionTLS13,
-		TLSVersMin: utls.VersionTLS10,
-		CipherSuites: defaultCipherSuites,
+		CipherSuites:       defaultCipherSuites,
 		CompressionMethods: []uint8{0}, // null only
-		Extensions: []utls.TLSExtension{
-			&utls.UtlsGREASEExtension{},                  // GREASE (first)
-			&utls.SNIExtension{},
-			&utls.SupportedPointsExtension{SupportedPoints: defaultPointFormats},
-			&utls.SupportedCurvesExtension{Curves: defaultCurves},
-			&utls.SessionTicketExtension{},
-			&utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}},
-			&utls.ExtendedMasterSecretExtension{},         // Bug 3: correct type
-			&utls.GenericExtension{Id: 22},                // encrypt_then_mac (Bug 2)
-			&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: defaultSignatureAlgorithms},
-			&utls.SupportedVersionsExtension{Versions: []uint16{utls.VersionTLS13, utls.VersionTLS12}},
-			&utls.PSKKeyExchangeModesExtension{Modes: []uint8{utls.PskModeDHE}},
-			&utls.KeyShareExtension{KeyShares: []utls.KeyShare{{Group: utls.X25519}}},
-			&utls.UtlsGREASEExtension{},                  // GREASE (near end)
-			&utls.UtlsPaddingExtension{GetPaddingLen: utls.BoringPaddingStyle},
-		},
+		Extensions:         extensions,
+		TLSVersMax:         utls.VersionTLS13,
+		TLSVersMin:         utls.VersionTLS10,
 	}
 }
 
@@ -114,7 +102,7 @@ func buildClientHelloSpec() *utls.ClientHelloSpec {
 // TLS 指纹 Transport 构建
 // ──────────────────────────────────────────────────────
 
-// buildFingerprintTransport 构建带 TLS 指纹的 HTTP Transport
+// buildFingerprintTransport 构建带 Node.js 24.x TLS 指纹的 HTTP Transport
 func buildFingerprintTransport(proxyURL string) *http.Transport {
 	dialer := &net.Dialer{
 		Timeout:   httpDialTimeout,
@@ -125,7 +113,7 @@ func buildFingerprintTransport(proxyURL string) *http.Transport {
 		MaxIdleConns:        httpMaxIdleConns,
 		MaxIdleConnsPerHost: httpIdleConnsPerHost,
 		IdleConnTimeout:     httpIdleTimeout,
-		ForceAttemptHTTP2:   false, // uTLS 不完全支持 HTTP/2 negotiation
+		ForceAttemptHTTP2:   false,
 	}
 
 	if proxyURL != "" {
@@ -135,7 +123,6 @@ func buildFingerprintTransport(proxyURL string) *http.Transport {
 	}
 
 	transport.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		// 如果有代理，先通过代理建立 TCP 连接
 		var rawConn net.Conn
 		var err error
 
@@ -145,16 +132,14 @@ func buildFingerprintTransport(proxyURL string) *http.Transport {
 			rawConn, err = dialer.DialContext(ctx, network, addr)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("TCP 连接失败: %w", err)
+			return nil, fmt.Errorf("TCP dial failed: %w", err)
 		}
 
-		// 提取主机名（去掉端口）
 		host, _, _ := net.SplitHostPort(addr)
 		if host == "" {
 			host = addr
 		}
 
-		// 使用 uTLS 建立指纹化 TLS 连接
 		tlsConn := utls.UClient(rawConn, &utls.Config{
 			ServerName:         host,
 			InsecureSkipVerify: false,
@@ -163,12 +148,12 @@ func buildFingerprintTransport(proxyURL string) *http.Transport {
 
 		if err := tlsConn.ApplyPreset(buildClientHelloSpec()); err != nil {
 			_ = rawConn.Close()
-			return nil, fmt.Errorf("应用 TLS 指纹失败: %w", err)
+			return nil, fmt.Errorf("apply TLS preset: %w", err)
 		}
 
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			_ = rawConn.Close()
-			return nil, fmt.Errorf("TLS 握手失败: %w", err)
+			return nil, fmt.Errorf("TLS handshake failed: %w", err)
 		}
 
 		return tlsConn, nil
@@ -177,7 +162,10 @@ func buildFingerprintTransport(proxyURL string) *http.Transport {
 	return transport
 }
 
-// dialThroughProxy 通过代理建立隧道连接
+// ──────────────────────────────────────────────────────
+// 代理隧道
+// ──────────────────────────────────────────────────────
+
 func dialThroughProxy(ctx context.Context, proxyURL string, targetAddr string, dialer *net.Dialer) (net.Conn, error) {
 	parsed, err := url.Parse(proxyURL)
 	if err != nil {
@@ -196,7 +184,7 @@ func dialThroughProxy(ctx context.Context, proxyURL string, targetAddr string, d
 		}
 	}
 
-	// Bug 1: SOCKS5 代理使用 golang.org/x/net/proxy 正确隧道
+	// SOCKS5
 	if parsed.Scheme == "socks5" {
 		var auth *proxy.Auth
 		if parsed.User != nil {
@@ -208,19 +196,19 @@ func dialThroughProxy(ctx context.Context, proxyURL string, targetAddr string, d
 		}
 		socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, proxy.Direct)
 		if err != nil {
-			return nil, fmt.Errorf("创建 SOCKS5 代理失败: %w", err)
+			return nil, fmt.Errorf("create SOCKS5 dialer: %w", err)
 		}
 		conn, err := socksDialer.Dial("tcp", targetAddr)
 		if err != nil {
-			return nil, fmt.Errorf("SOCKS5 代理连接失败: %w", err)
+			return nil, fmt.Errorf("SOCKS5 connect: %w", err)
 		}
 		return conn, nil
 	}
 
-	// Bug 5: HTTP CONNECT 隧道使用 stdlib http.Request + http.ReadResponse
+	// HTTP CONNECT
 	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
 	if err != nil {
-		return nil, fmt.Errorf("连接代理失败: %w", err)
+		return nil, fmt.Errorf("connect to proxy: %w", err)
 	}
 
 	connectReq := &http.Request{
@@ -237,20 +225,20 @@ func dialThroughProxy(ctx context.Context, proxyURL string, targetAddr string, d
 
 	if err := connectReq.Write(conn); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("发送 CONNECT 失败: %w", err)
+		return nil, fmt.Errorf("write CONNECT: %w", err)
 	}
 
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, connectReq)
 	if err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("读取代理响应失败: %w", err)
+		return nil, fmt.Errorf("read proxy response: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		_ = conn.Close()
-		return nil, fmt.Errorf("代理 CONNECT 失败: %s", resp.Status)
+		return nil, fmt.Errorf("proxy CONNECT failed: %s", resp.Status)
 	}
 
 	return conn, nil

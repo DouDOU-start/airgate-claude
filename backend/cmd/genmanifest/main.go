@@ -158,10 +158,10 @@ func convertModels(models []sdk.ModelInfo) []modelInfo {
 		items = append(items, modelInfo{
 			ID:          model.ID,
 			Name:        model.Name,
-			MaxTokens:   model.MaxTokens,
+			MaxTokens:   model.ContextWindow,
 			InputPrice:  model.InputPrice,
 			OutputPrice: model.OutputPrice,
-			CachePrice:  model.CachePrice,
+			CachePrice:  model.CachedInputPrice,
 		})
 	}
 	return items

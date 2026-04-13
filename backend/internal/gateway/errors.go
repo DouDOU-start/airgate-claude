@@ -6,20 +6,47 @@ import (
 	"regexp"
 	"strconv"
 	"time"
+
+	sdk "github.com/DouDOU-start/airgate-sdk"
+	"github.com/tidwall/gjson"
 )
 
 // accountStatusFromCode 根据 HTTP 状态码推断账号状态
-func accountStatusFromCode(statusCode int) string {
+func accountStatusFromCode(statusCode int) sdk.AccountStatus {
 	switch statusCode {
 	case 429:
-		return "rate_limited"
+		return sdk.AccountStatusRateLimited
 	case 401:
-		return "expired"
+		return sdk.AccountStatusExpired
 	case 403:
-		return "disabled"
+		return sdk.AccountStatusDisabled
 	default:
+		return sdk.AccountStatusOK
+	}
+}
+
+// isRetryableUpstreamError 判断上游错误是否值得 failover 重试
+func isRetryableUpstreamError(statusCode int) bool {
+	return statusCode == 429 || statusCode >= 500
+}
+
+// extractErrorMessage 从 Anthropic JSON 错误响应中提取 error.type + error.message
+func extractErrorMessage(body []byte) string {
+	if len(body) == 0 {
 		return ""
 	}
+	errType := gjson.GetBytes(body, "error.type").String()
+	errMsg := gjson.GetBytes(body, "error.message").String()
+	if errType != "" && errMsg != "" {
+		return errType + ": " + errMsg
+	}
+	if errMsg != "" {
+		return errMsg
+	}
+	if errType != "" {
+		return errType
+	}
+	return ""
 }
 
 // anthropicErrorType 根据 HTTP 状态码返回 Anthropic 错误类型

@@ -6,9 +6,9 @@ import sdk "github.com/DouDOU-start/airgate-sdk"
 
 const (
 	PluginID             = "gateway-anthropic"
-	PluginDisplayName    = "Anthropic 网关"
+	PluginDisplayName    = "Claude 网关"
 	PluginVersion        = "1.0.0"
-	PluginDescription    = "Anthropic Claude Messages API 转发"
+	PluginDescription    = "Claude Messages API 网关"
 	PluginAuthor         = "airgate"
 	PluginPlatform       = "anthropic"
 	PluginMode           = "simple"
@@ -40,11 +40,23 @@ func BuildPluginInfo() sdk.PluginInfo {
 			{
 				Key:         "oauth",
 				Label:       "OAuth 令牌",
-				Description: "使用 OAuth Access Token 访问（通过 Session Key 自动获取）",
+				Description: "使用 OAuth Access Token 访问（完整 scope，支持 session/mcp）",
 				Fields: []sdk.CredentialField{
 					{Key: "access_token", Label: "Access Token", Type: "password", Required: false, Placeholder: "自动获取"},
 					{Key: "refresh_token", Label: "Refresh Token", Type: "password", Required: false, Placeholder: "自动获取"},
 					{Key: "expires_at", Label: "过期时间", Type: "text", Required: false, Placeholder: "自动填充"},
+					{Key: "base_url", Label: "API 地址", Type: "text", Required: false, Placeholder: "https://api.anthropic.com"},
+				},
+			},
+			{
+				Key:         "setup_token",
+				Label:       "Setup Token",
+				Description: "仅推理 scope 的长期 OAuth 令牌（有效期 1 年）",
+				Fields: []sdk.CredentialField{
+					{Key: "access_token", Label: "Access Token", Type: "password", Required: false, Placeholder: "自动获取"},
+					{Key: "refresh_token", Label: "Refresh Token", Type: "password", Required: false, Placeholder: "自动获取"},
+					{Key: "expires_at", Label: "过期时间", Type: "text", Required: false, Placeholder: "自动填充"},
+					{Key: "base_url", Label: "API 地址", Type: "text", Required: false, Placeholder: "https://api.anthropic.com"},
 				},
 			},
 			{
@@ -56,6 +68,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 					{Key: "access_token", Label: "Access Token", Type: "password", Required: false, Placeholder: "自动获取", EditDisabled: true},
 					{Key: "refresh_token", Label: "Refresh Token", Type: "password", Required: false, Placeholder: "自动获取", EditDisabled: true},
 					{Key: "expires_at", Label: "过期时间", Type: "text", Required: false, Placeholder: "自动填充", EditDisabled: true},
+					{Key: "base_url", Label: "API 地址", Type: "text", Required: false, Placeholder: "https://api.anthropic.com"},
 				},
 			},
 		},

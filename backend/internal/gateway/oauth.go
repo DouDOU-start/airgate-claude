@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/imroc/req/v3"
 )
 
 // ──────────────────────────────────────────────────────
@@ -26,8 +28,9 @@ const (
 	OAuthAuthorizeURL = "https://claude.ai/oauth/authorize"
 	OAuthTokenURL     = "https://platform.claude.com/v1/oauth/token"
 	OAuthRedirectURI  = "https://platform.claude.com/oauth/code/callback"
-	OAuthScopeBrowser = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers"
-	OAuthScopeAPI     = "user:profile user:inference user:sessions:claude_code user:mcp_servers"
+	OAuthScopeBrowser   = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+	OAuthScopeAPI       = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+	OAuthScopeInference = "user:inference" // setup_token 仅推理 scope
 
 	// Session Key 通过 claude.ai 获取 org 和 authorization code 的端点
 	claudeAIBaseURL = "https://claude.ai"
@@ -151,12 +154,7 @@ func (g *AnthropicGateway) HandleOAuthCallback(ctx context.Context, code, state,
 		return nil, fmt.Errorf("OAuth 会话已过期")
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	if proxyURL != "" {
-		if u, err := url.Parse(proxyURL); err == nil {
-			client.Transport = &http.Transport{Proxy: http.ProxyURL(u)}
-		}
-	}
+	client := g.buildOAuthClient(proxyURL)
 
 	// 直接用 code + 保存的 code_verifier 换 token
 	tokenResp, err := g.exchangeCodeForToken(ctx, client, code, session.CodeVerifier, state)
@@ -203,21 +201,48 @@ type AccountInfo struct {
 	EmailAddress string `json:"email_address"`
 }
 
-// ExchangeSessionKeyForToken 通过 Session Key 获取 OAuth Token
+// ExchangeSessionKeyForSetupToken 通过 Session Key 获取 Setup Token（仅 inference scope，1年有效期）
+func (g *AnthropicGateway) ExchangeSessionKeyForSetupToken(ctx context.Context, sessionKey, proxyURL string) (*TokenResponse, error) {
+	return g.exchangeSessionKeyWithScope(ctx, sessionKey, proxyURL, OAuthScopeInference, true)
+}
+
+// ExchangeSessionKeyForToken 通过 Session Key 获取 OAuth Token（完整 scope）
 // 完整流程：
 //  1. GET claude.ai/api/organizations → 获取 org UUID
 //  2. POST claude.ai/v1/oauth/{orgUUID}/authorize → 获取 authorization code
 //  3. POST platform.claude.com/v1/oauth/token → 用 code 换 access_token
 func (g *AnthropicGateway) ExchangeSessionKeyForToken(ctx context.Context, sessionKey, proxyURL string) (*TokenResponse, error) {
-	client := &http.Client{Timeout: 60 * time.Second}
+	return g.exchangeSessionKeyWithScope(ctx, sessionKey, proxyURL, OAuthScopeAPI, false)
+}
+
+// buildOAuthReqClient 构建用于 claude.ai 请求的 req 客户端（Chrome TLS 指纹 + 绕过 Cloudflare）
+func buildOAuthReqClient(proxyURL string) *req.Client {
+	client := req.C().
+		SetTimeout(60 * time.Second).
+		ImpersonateChrome().
+		SetCookieJar(nil) // 禁用自动 cookie 管理，每次请求手动设置
 	if proxyURL != "" {
-		if u, err := url.Parse(proxyURL); err == nil {
-			client.Transport = &http.Transport{Proxy: http.ProxyURL(u)}
-		}
+		client.SetProxyURL(proxyURL)
 	}
+	return client
+}
+
+// buildOAuthClient 构建用于 token 交换的标准 HTTP 客户端（platform.claude.com 无 Cloudflare）
+func (g *AnthropicGateway) buildOAuthClient(proxyURL string) *http.Client {
+	transport := buildFingerprintTransport(proxyURL)
+	return &http.Client{
+		Timeout:   60 * time.Second,
+		Transport: transport,
+	}
+}
+
+// exchangeSessionKeyWithScope 通用的 Session Key → OAuth Token 流程
+func (g *AnthropicGateway) exchangeSessionKeyWithScope(ctx context.Context, sessionKey, proxyURL, scope string, isSetupToken bool) (*TokenResponse, error) {
+	// claude.ai 请求使用 Chrome 指纹客户端（绕过 Cloudflare）
+	reqClient := buildOAuthReqClient(proxyURL)
 
 	// Step 1: 获取组织 UUID
-	orgUUID, err := g.getOrganizationUUID(ctx, client, sessionKey)
+	orgUUID, err := g.getOrganizationUUID(ctx, reqClient, sessionKey)
 	if err != nil {
 		return nil, fmt.Errorf("获取组织 UUID 失败: %w", err)
 	}
@@ -234,14 +259,15 @@ func (g *AnthropicGateway) ExchangeSessionKeyForToken(ctx context.Context, sessi
 		return nil, fmt.Errorf("生成 state 失败: %w", err)
 	}
 
-	// Step 2: 获取 authorization code
-	authCode, err := g.getAuthorizationCode(ctx, client, sessionKey, orgUUID, codeChallenge, state)
+	// Step 2: 获取 authorization code（使用指定 scope）
+	authCode, err := g.getAuthorizationCodeWithScope(ctx, reqClient, sessionKey, orgUUID, codeChallenge, state, scope)
 	if err != nil {
 		return nil, fmt.Errorf("获取授权码失败: %w", err)
 	}
 
-	// Step 3: 用 code 换 token
-	tokenResp, err := g.exchangeCodeForToken(ctx, client, authCode, codeVerifier, state)
+	// Step 3: 用 code 换 token（platform.claude.com 无 Cloudflare，用标准 HTTP 客户端）
+	httpClient := g.buildOAuthClient(proxyURL)
+	tokenResp, err := g.exchangeCodeForTokenEx(ctx, httpClient, authCode, codeVerifier, state, isSetupToken)
 	if err != nil {
 		return nil, fmt.Errorf("换取 token 失败: %w", err)
 	}
@@ -249,33 +275,30 @@ func (g *AnthropicGateway) ExchangeSessionKeyForToken(ctx context.Context, sessi
 	return tokenResp, nil
 }
 
-// getOrganizationUUID 获取 Claude 组织 UUID
-func (g *AnthropicGateway) getOrganizationUUID(ctx context.Context, client *http.Client, sessionKey string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, claudeAIBaseURL+"/api/organizations", nil)
-	if err != nil {
-		return "", err
-	}
-	req.AddCookie(&http.Cookie{Name: "sessionKey", Value: sessionKey})
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
-	}
-
+// getOrganizationUUID 获取 Claude 组织 UUID（使用 req/v3 Chrome 指纹绕过 Cloudflare）
+func (g *AnthropicGateway) getOrganizationUUID(ctx context.Context, client *req.Client, sessionKey string) (string, error) {
 	var orgs []struct {
 		UUID      string  `json:"uuid"`
 		Name      string  `json:"name"`
 		RavenType *string `json:"raven_type"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&orgs); err != nil {
-		return "", fmt.Errorf("解析组织列表失败: %w", err)
+
+	resp, err := client.R().
+		SetContext(ctx).
+		SetCookies(&http.Cookie{Name: "sessionKey", Value: sessionKey}).
+		SetHeader("Accept", "application/json").
+		SetHeader("Accept-Language", "en-US,en;q=0.9").
+		SetHeader("Cache-Control", "no-cache").
+		SetSuccessResult(&orgs).
+		Get(claudeAIBaseURL + "/api/organizations")
+	if err != nil {
+		return "", err
 	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(resp.String(), 200))
+	}
+
 	if len(orgs) == 0 {
 		return "", fmt.Errorf("未找到组织")
 	}
@@ -289,8 +312,13 @@ func (g *AnthropicGateway) getOrganizationUUID(ctx context.Context, client *http
 	return orgs[0].UUID, nil
 }
 
-// getAuthorizationCode 获取 OAuth 授权码
-func (g *AnthropicGateway) getAuthorizationCode(ctx context.Context, client *http.Client, sessionKey, orgUUID, codeChallenge, state string) (string, error) {
+// getAuthorizationCode 获取 OAuth 授权码（默认 API scope）
+func (g *AnthropicGateway) getAuthorizationCode(ctx context.Context, client *req.Client, sessionKey, orgUUID, codeChallenge, state string) (string, error) {
+	return g.getAuthorizationCodeWithScope(ctx, client, sessionKey, orgUUID, codeChallenge, state, OAuthScopeAPI)
+}
+
+// getAuthorizationCodeWithScope 获取 OAuth 授权码（使用 req/v3 Chrome 指纹）
+func (g *AnthropicGateway) getAuthorizationCodeWithScope(ctx context.Context, client *req.Client, sessionKey, orgUUID, codeChallenge, state, scope string) (string, error) {
 	authURL := fmt.Sprintf("%s/v1/oauth/%s/authorize", claudeAIBaseURL, orgUUID)
 
 	reqBody := map[string]any{
@@ -298,44 +326,35 @@ func (g *AnthropicGateway) getAuthorizationCode(ctx context.Context, client *htt
 		"client_id":             OAuthClientID,
 		"organization_uuid":     orgUUID,
 		"redirect_uri":          OAuthRedirectURI,
-		"scope":                 OAuthScopeAPI,
+		"scope":                 scope,
 		"state":                 state,
 		"code_challenge":        codeChallenge,
 		"code_challenge_method": "S256",
 	}
 
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, authURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return "", err
-	}
-	req.AddCookie(&http.Cookie{Name: "sessionKey", Value: sessionKey})
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Origin", "https://claude.ai")
-	req.Header.Set("Referer", "https://claude.ai/new")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
-	}
-
 	var result struct {
 		RedirectURI string `json:"redirect_uri"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("解析授权响应失败: %w", err)
+
+	resp, err := client.R().
+		SetContext(ctx).
+		SetCookies(&http.Cookie{Name: "sessionKey", Value: sessionKey}).
+		SetHeader("Accept", "application/json").
+		SetHeader("Accept-Language", "en-US,en;q=0.9").
+		SetHeader("Cache-Control", "no-cache").
+		SetHeader("Origin", "https://claude.ai").
+		SetHeader("Referer", "https://claude.ai/new").
+		SetBody(reqBody).
+		SetSuccessResult(&result).
+		Post(authURL)
+	if err != nil {
+		return "", err
 	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(resp.String(), 200))
+	}
+
 	if result.RedirectURI == "" {
 		return "", fmt.Errorf("响应中缺少 redirect_uri")
 	}
@@ -360,8 +379,13 @@ func (g *AnthropicGateway) getAuthorizationCode(ctx context.Context, client *htt
 	return fullCode, nil
 }
 
-// exchangeCodeForToken 用授权码换取 token
+// exchangeCodeForToken 用授权码换取 token（标准模式）
 func (g *AnthropicGateway) exchangeCodeForToken(ctx context.Context, client *http.Client, code, codeVerifier, state string) (*TokenResponse, error) {
+	return g.exchangeCodeForTokenEx(ctx, client, code, codeVerifier, state, false)
+}
+
+// exchangeCodeForTokenEx 用授权码换取 token（支持 setup_token 的 expires_in）
+func (g *AnthropicGateway) exchangeCodeForTokenEx(ctx context.Context, client *http.Client, code, codeVerifier, state string, isSetupToken bool) (*TokenResponse, error) {
 	// 解析 code（可能包含 state: "authCode#state"）
 	authCode := code
 	codeState := ""
@@ -379,6 +403,10 @@ func (g *AnthropicGateway) exchangeCodeForToken(ctx context.Context, client *htt
 	}
 	if codeState != "" {
 		reqBody["state"] = codeState
+	}
+	// Setup Token：请求 1 年有效期
+	if isSetupToken {
+		reqBody["expires_in"] = 31536000 // 365 天
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -414,12 +442,7 @@ func (g *AnthropicGateway) exchangeCodeForToken(ctx context.Context, client *htt
 
 // RefreshToken 刷新 OAuth token
 func (g *AnthropicGateway) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*TokenResponse, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-	if proxyURL != "" {
-		if u, err := url.Parse(proxyURL); err == nil {
-			client.Transport = &http.Transport{Proxy: http.ProxyURL(u)}
-		}
-	}
+	client := g.buildOAuthClient(proxyURL)
 
 	reqBody := map[string]any{
 		"grant_type":    "refresh_token",

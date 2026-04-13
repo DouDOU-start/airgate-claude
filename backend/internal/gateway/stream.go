@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -30,6 +31,8 @@ func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time
 		StatusCode: resp.StatusCode,
 	}
 
+	var firstTokenOnce sync.Once
+
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
@@ -50,9 +53,17 @@ func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time
 			continue
 		}
 
-		// 从 message_start 事件提取 input_tokens
-		// 从 message_delta 事件提取 output_tokens
-		extractAnthropicUsage(data, result)
+		eventType := gjson.Get(data, "type").String()
+
+		// 记录首 token 延迟：content_block_delta 表示有实际输出
+		if eventType == "content_block_delta" {
+			firstTokenOnce.Do(func() {
+				result.FirstTokenMs = time.Since(start).Milliseconds()
+			})
+		}
+
+		// 提取 usage
+		extractAnthropicUsage(data, eventType, result)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -84,14 +95,15 @@ func handleNonStreamResponse(resp *http.Response, w http.ResponseWriter, start t
 	}
 
 	return &sdk.ForwardResult{
-		StatusCode:   resp.StatusCode,
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		CacheTokens:  cacheTokens,
-		Model:        model,
-		Duration:     time.Since(start),
-		Body:         body,
-		Headers:      resp.Header,
+		StatusCode:            resp.StatusCode,
+		InputTokens:           inputTokens,
+		OutputTokens:          outputTokens,
+		CachedInputTokens:     cacheTokens,
+		ReasoningOutputTokens: int(gjson.GetBytes(body, "usage.reasoning_output_tokens").Int()),
+		Model:                 model,
+		Duration:              time.Since(start),
+		Body:                  body,
+		Headers:               resp.Header,
 	}, nil
 }
 
@@ -106,18 +118,19 @@ func extractSSEData(line string) (string, bool) {
 }
 
 // extractAnthropicUsage 从 Anthropic SSE data 中提取 usage 信息
-func extractAnthropicUsage(data string, result *sdk.ForwardResult) {
-	eventType := gjson.Get(data, "type").String()
-
+func extractAnthropicUsage(data string, eventType string, result *sdk.ForwardResult) {
 	switch eventType {
 	case "message_start":
 		// message_start 包含初始 usage（input_tokens）
 		result.InputTokens = int(gjson.Get(data, "message.usage.input_tokens").Int())
-		result.CacheTokens = int(gjson.Get(data, "message.usage.cache_read_input_tokens").Int())
+		result.CachedInputTokens = int(gjson.Get(data, "message.usage.cache_read_input_tokens").Int())
 		result.Model = gjson.Get(data, "message.model").String()
 
 	case "message_delta":
-		// message_delta 包含最终 output_tokens
+		// message_delta 包含最终 output_tokens + reasoning_output_tokens
 		result.OutputTokens = int(gjson.Get(data, "usage.output_tokens").Int())
+		if reasoning := gjson.Get(data, "usage.reasoning_output_tokens"); reasoning.Exists() {
+			result.ReasoningOutputTokens = int(reasoning.Int())
+		}
 	}
 }

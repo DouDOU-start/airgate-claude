@@ -62,14 +62,85 @@ const descStyle: React.CSSProperties = {
   marginTop: '0.25rem',
 };
 
-type AccountType = 'apikey' | 'oauth' | 'session_key';
+const pillStyle: React.CSSProperties = {
+  display: 'inline-block',
+  padding: '0.25rem 0.625rem',
+  borderRadius: '9999px',
+  fontSize: '0.75rem',
+  cursor: 'pointer',
+  transition: 'all 0.15s',
+  border: `1px solid ${cssVar('glassBorder')}`,
+  color: cssVar('textSecondary'),
+  backgroundColor: 'transparent',
+};
 
-function detectType(credentials: Record<string, string>): AccountType | '' {
-  if (credentials.api_key) return 'apikey';
-  if (credentials.session_key) return 'session_key';
-  if (credentials.access_token) return 'oauth';
-  return '';
+const pillActiveStyle: React.CSSProperties = {
+  ...pillStyle,
+  borderColor: cssVar('primary'),
+  color: cssVar('primary'),
+  backgroundColor: cssVar('primarySubtle'),
+};
+
+const sectionStyle: React.CSSProperties = {
+  border: `1px solid ${cssVar('glassBorder')}`,
+  borderRadius: cssVar('radiusLg'),
+  padding: '1rem',
+  backgroundColor: cssVar('bgSurface'),
+};
+
+// ── 类型定义 ──
+
+/** UI 分类：Claude Code（OAuth 系列）或 Claude Console（API Key） */
+type UICategory = 'claude_code' | 'claude_console';
+
+/** 后端账号类型 */
+type AccountType = 'apikey' | 'oauth' | 'setup_token' | 'session_key';
+
+/** Claude Code 内部的获取方式 */
+type AcquireMethod = 'session_key' | 'browser_oauth';
+
+/** Claude Code 内部的 scope 类型 */
+type ScopeType = 'full' | 'inference';
+
+function detectCategory(accountType?: string, credentials?: Record<string, string>): UICategory {
+  if (accountType === 'apikey') return 'claude_console';
+  if (accountType === 'oauth' || accountType === 'setup_token' || accountType === 'session_key') return 'claude_code';
+  if (credentials?.api_key) return 'claude_console';
+  if (credentials?.session_key || credentials?.access_token) return 'claude_code';
+  return 'claude_code';
 }
+
+function detectScopeType(accountType?: string): ScopeType {
+  return accountType === 'setup_token' ? 'inference' : 'full';
+}
+
+function detectAcquireMethod(accountType?: string, credentials?: Record<string, string>): AcquireMethod {
+  if (accountType === 'session_key' || credentials?.session_key) return 'session_key';
+  return 'session_key'; // 默认 session_key，最常用
+}
+
+// ── 状态提示组件 ──
+
+function StatusMessage({ status }: { status: { type: 'info' | 'success' | 'error'; text: string } | null }) {
+  if (!status) return null;
+  return (
+    <div
+      style={{
+        fontSize: '0.75rem',
+        color:
+          status.type === 'error'
+            ? cssVar('danger')
+            : status.type === 'success'
+              ? cssVar('success')
+              : cssVar('textSecondary'),
+      }}
+    >
+      {status.text}
+    </div>
+  );
+}
+
+// ── 主组件 ──
 
 export function AccountForm({
   credentials,
@@ -80,20 +151,19 @@ export function AccountForm({
   onSuggestedName,
   oauth,
 }: AccountFormProps) {
-  const [localType, setLocalType] = useState<AccountType | ''>(
-    (propType as AccountType) || (mode === 'edit' ? detectType(credentials) : ''),
+  const [category, setCategory] = useState<UICategory>(
+    detectCategory(propType, credentials),
   );
-  const accountType = (propType as AccountType | undefined) ?? localType;
+  const [scopeType, setScopeType] = useState<ScopeType>(detectScopeType(propType));
+  const [acquireMethod, setAcquireMethod] = useState<AcquireMethod>(
+    detectAcquireMethod(propType, credentials),
+  );
 
   // OAuth 浏览器授权流程状态
   const [authorizeURL, setAuthorizeURL] = useState('');
   const [callbackURL, setCallbackURL] = useState('');
   const [oauthLoading, setOauthLoading] = useState(false);
   const [oauthStatus, setOauthStatus] = useState<{ type: 'info' | 'success' | 'error'; text: string } | null>(null);
-
-  // Session Key 交换状态
-  const [exchangeLoading, setExchangeLoading] = useState(false);
-  const [exchangeStatus, setExchangeStatus] = useState<{ type: 'info' | 'success' | 'error'; text: string } | null>(null);
 
   const updateField = useCallback(
     (key: string, value: string) => {
@@ -102,26 +172,60 @@ export function AccountForm({
     [credentials, onChange],
   );
 
-  const handleTypeChange = useCallback(
-    (type: AccountType) => {
-      setLocalType(type);
-      onAccountTypeChange?.(type);
+  // 根据 category + scope 推导后端 account type
+  const resolveAccountType = useCallback(
+    (cat: UICategory, scope: ScopeType, method: AcquireMethod): AccountType => {
+      if (cat === 'claude_console') return 'apikey';
+      if (scope === 'inference') return 'setup_token';
+      if (method === 'session_key') return 'session_key';
+      return 'oauth';
+    },
+    [],
+  );
+
+  // 切换大类
+  const handleCategoryChange = useCallback(
+    (cat: UICategory) => {
+      setCategory(cat);
       setAuthorizeURL('');
       setCallbackURL('');
       setOauthStatus(null);
-      setExchangeStatus(null);
-      if (type === 'apikey') {
+      if (cat === 'claude_console') {
+        onAccountTypeChange?.('apikey');
         onChange({ api_key: '', base_url: '' });
-      } else if (type === 'oauth') {
-        onChange({ access_token: '', refresh_token: '', expires_at: '' });
-      } else if (type === 'session_key') {
-        onChange({ session_key: '', access_token: '', refresh_token: '', expires_at: '' });
+      } else {
+        const type = resolveAccountType(cat, scopeType, acquireMethod);
+        onAccountTypeChange?.(type);
+        onChange({ session_key: '', access_token: '', refresh_token: '', expires_at: '', base_url: '' });
       }
     },
-    [onChange, onAccountTypeChange],
+    [onChange, onAccountTypeChange, resolveAccountType, scopeType, acquireMethod],
   );
 
-  // ── OAuth 浏览器流程：生成授权链接 ──
+  // 切换 scope（full / inference）
+  const handleScopeChange = useCallback(
+    (scope: ScopeType) => {
+      setScopeType(scope);
+      const type = resolveAccountType('claude_code', scope, acquireMethod);
+      onAccountTypeChange?.(type);
+    },
+    [onAccountTypeChange, resolveAccountType, acquireMethod],
+  );
+
+  // 切换获取方式
+  const handleAcquireMethodChange = useCallback(
+    (method: AcquireMethod) => {
+      setAcquireMethod(method);
+      setAuthorizeURL('');
+      setCallbackURL('');
+      setOauthStatus(null);
+      const type = resolveAccountType('claude_code', scopeType, method);
+      onAccountTypeChange?.(type);
+    },
+    [onAccountTypeChange, resolveAccountType, scopeType],
+  );
+
+  // ── OAuth 浏览器流程 ──
   const startOAuth = useCallback(async () => {
     if (!oauth) return;
     setOauthLoading(true);
@@ -132,16 +236,12 @@ export function AccountForm({
       setCallbackURL('');
       setOauthStatus({ type: 'success', text: '授权链接已生成，请复制到浏览器完成授权。' });
     } catch (error) {
-      setOauthStatus({
-        type: 'error',
-        text: error instanceof Error ? error.message : '生成授权链接失败',
-      });
+      setOauthStatus({ type: 'error', text: error instanceof Error ? error.message : '生成授权链接失败' });
     } finally {
       setOauthLoading(false);
     }
   }, [oauth]);
 
-  // ── OAuth 浏览器流程：提交回调 URL 完成交换 ──
   const submitOAuthCallback = useCallback(async () => {
     if (!oauth || !callbackURL.trim()) return;
     setOauthLoading(true);
@@ -150,84 +250,95 @@ export function AccountForm({
       const result = await oauth.exchange(callbackURL.trim());
       onAccountTypeChange?.(result.accountType || 'oauth');
       onChange({ ...credentials, ...result.credentials });
-      if (result.accountName) {
-        onSuggestedName?.(result.accountName);
-      }
+      if (result.accountName) onSuggestedName?.(result.accountName);
       setOauthStatus({ type: 'success', text: '授权成功，凭证已自动填充。' });
     } catch (error) {
-      setOauthStatus({
-        type: 'error',
-        text: error instanceof Error ? error.message : '授权交换失败',
-      });
+      setOauthStatus({ type: 'error', text: error instanceof Error ? error.message : '授权交换失败' });
     } finally {
       setOauthLoading(false);
     }
   }, [oauth, callbackURL, onAccountTypeChange, onChange, credentials, onSuggestedName]);
 
-  // ── OAuth 浏览器流程：复制授权链接 ──
   const copyAuthorizeURL = useCallback(async () => {
     if (!authorizeURL) return;
     try {
       await navigator.clipboard.writeText(authorizeURL);
       setOauthStatus({ type: 'success', text: '授权链接已复制到剪贴板。' });
     } catch {
-      setOauthStatus({ type: 'error', text: '复制失败，请手动复制授权链接。' });
+      setOauthStatus({ type: 'error', text: '复制失败，请手动复制。' });
     }
   }, [authorizeURL]);
 
   // ── Session Key 自动换 Token ──
   const exchangeSessionKey = useCallback(async () => {
     if (!oauth || !credentials.session_key?.trim()) return;
-    setExchangeLoading(true);
-    setExchangeStatus({ type: 'info', text: '正在通过 Session Key 获取 OAuth Token...' });
+    setOauthLoading(true);
+    setOauthStatus({ type: 'info', text: '正在通过 Session Key 获取 OAuth Token...' });
     try {
-      const result = await oauth.exchange(JSON.stringify({ session_key: credentials.session_key }));
+      const payload: Record<string, string> = { session_key: credentials.session_key };
+      if (scopeType === 'inference') payload.scope = 'inference';
+      const result = await oauth.exchange(JSON.stringify(payload));
       onChange({ ...credentials, ...result.credentials });
-      if (result.accountName) {
-        onSuggestedName?.(result.accountName);
-      }
-      setExchangeStatus({ type: 'success', text: 'OAuth Token 获取成功，凭证已自动填充。' });
+      if (result.accountName) onSuggestedName?.(result.accountName);
+      if (result.accountType) onAccountTypeChange?.(result.accountType);
+      setOauthStatus({ type: 'success', text: 'OAuth Token 获取成功。' });
     } catch (error) {
-      setExchangeStatus({
-        type: 'error',
-        text: error instanceof Error ? error.message : '获取 Token 失败',
-      });
+      setOauthStatus({ type: 'error', text: error instanceof Error ? error.message : '获取 Token 失败' });
     } finally {
-      setExchangeLoading(false);
+      setOauthLoading(false);
     }
-  }, [oauth, credentials, onChange, onSuggestedName]);
+  }, [oauth, credentials, onChange, onSuggestedName, onAccountTypeChange, scopeType]);
+
+  // ── 按钮样式 ──
+  const primaryBtn = (disabled: boolean): React.CSSProperties => ({
+    ...inputStyle,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    backgroundColor: cssVar('primary'),
+    color: 'white',
+    border: 'none',
+    fontWeight: 500,
+    width: 'auto',
+    opacity: disabled ? 0.6 : 1,
+  });
+
+  const outlineBtn = (disabled: boolean): React.CSSProperties => ({
+    ...inputStyle,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    backgroundColor: 'transparent',
+    color: cssVar('primary'),
+    border: `1px solid ${cssVar('primary')}`,
+    width: 'auto',
+    opacity: disabled ? 0.6 : 1,
+  });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+
+      {/* ── 大类选择：Claude Code / Claude Console ── */}
       <div>
         <span style={labelStyle}>账号类型 *</span>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
           <div
-            style={accountType === 'apikey' ? cardActiveStyle : cardStyle}
-            onClick={() => handleTypeChange('apikey')}
+            style={category === 'claude_code' ? cardActiveStyle : cardStyle}
+            onClick={() => handleCategoryChange('claude_code')}
           >
-            <div style={{ fontSize: '0.875rem', fontWeight: 500, color: cssVar('text') }}>API Key</div>
-            <div style={descStyle}>直接使用 Anthropic API Key</div>
+            <div style={{ fontSize: '0.875rem', fontWeight: 500, color: cssVar('text') }}>Claude Code</div>
+            <div style={descStyle}>OAuth / Setup Token</div>
           </div>
           <div
-            style={accountType === 'oauth' ? cardActiveStyle : cardStyle}
-            onClick={() => handleTypeChange('oauth')}
+            style={category === 'claude_console' ? cardActiveStyle : cardStyle}
+            onClick={() => handleCategoryChange('claude_console')}
           >
-            <div style={{ fontSize: '0.875rem', fontWeight: 500, color: cssVar('text') }}>OAuth 登录</div>
-            <div style={descStyle}>通过浏览器授权登录</div>
-          </div>
-          <div
-            style={accountType === 'session_key' ? cardActiveStyle : cardStyle}
-            onClick={() => handleTypeChange('session_key')}
-          >
-            <div style={{ fontSize: '0.875rem', fontWeight: 500, color: cssVar('text') }}>Session Key</div>
-            <div style={descStyle}>通过 claude.ai 自动获取 Token</div>
+            <div style={{ fontSize: '0.875rem', fontWeight: 500, color: cssVar('text') }}>Claude Console</div>
+            <div style={descStyle}>API Key</div>
           </div>
         </div>
       </div>
 
-      {/* ── API Key 模式 ── */}
-      {accountType === 'apikey' && (
+      {/* ══════════════════════════════════════════════ */}
+      {/* ── Claude Console（API Key）                 ── */}
+      {/* ══════════════════════════════════════════════ */}
+      {category === 'claude_console' && (
         <>
           <div>
             <label style={labelStyle}>
@@ -242,7 +353,7 @@ export function AccountForm({
             />
           </div>
           <div>
-            <label style={labelStyle}>API 地址</label>
+            <label style={labelStyle}>Base URL</label>
             <input
               type="text"
               style={inputStyle}
@@ -250,257 +361,201 @@ export function AccountForm({
               value={credentials.base_url ?? ''}
               onChange={(e) => updateField('base_url', e.target.value)}
             />
-            <div style={{ ...descStyle, marginTop: '0.375rem' }}>
-              留空使用默认地址，支持自定义反向代理
-            </div>
+            <div style={{ ...descStyle, marginTop: '0.375rem' }}>留空使用官方 Anthropic API</div>
           </div>
         </>
       )}
 
-      {/* ── OAuth 浏览器授权模式 ── */}
-      {accountType === 'oauth' && (
+      {/* ══════════════════════════════════════════════ */}
+      {/* ── Claude Code（OAuth 系列）                 ── */}
+      {/* ══════════════════════════════════════════════ */}
+      {category === 'claude_code' && (
         <>
-          {oauth && (
-            <div
-              style={{
-                border: `1px solid ${cssVar('glassBorder')}`,
-                borderRadius: cssVar('radiusLg'),
-                padding: '1rem',
-                backgroundColor: cssVar('bgSurface'),
-              }}
-            >
-              <div style={{ fontSize: '0.875rem', fontWeight: 600, color: cssVar('text'), marginBottom: '0.25rem' }}>
-                OAuth 授权辅助
+          {/* ── Token 类型选择 ── */}
+          <div>
+            <span style={labelStyle}>Token 类型</span>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <span
+                style={scopeType === 'full' ? pillActiveStyle : pillStyle}
+                onClick={() => handleScopeChange('full')}
+              >
+                OAuth 令牌
+              </span>
+              <span
+                style={scopeType === 'inference' ? pillActiveStyle : pillStyle}
+                onClick={() => handleScopeChange('inference')}
+              >
+                Setup Token
+              </span>
+            </div>
+            <div style={{ ...descStyle, marginTop: '0.375rem' }}>
+              {scopeType === 'full'
+                ? '完整 scope，支持 session/mcp 等全部功能'
+                : '仅推理 scope（user:inference），有效期 1 年'}
+            </div>
+          </div>
+
+          {/* ── 获取方式选择 ── */}
+          <div>
+            <span style={labelStyle}>获取方式</span>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <span
+                style={acquireMethod === 'session_key' ? pillActiveStyle : pillStyle}
+                onClick={() => handleAcquireMethodChange('session_key')}
+              >
+                Session Key 自动获取
+              </span>
+              <span
+                style={acquireMethod === 'browser_oauth' ? pillActiveStyle : pillStyle}
+                onClick={() => handleAcquireMethodChange('browser_oauth')}
+              >
+                浏览器授权
+              </span>
+            </div>
+          </div>
+
+          {/* ── Session Key 获取方式 ── */}
+          {acquireMethod === 'session_key' && (
+            <div style={sectionStyle}>
+              <div>
+                <label style={labelStyle}>
+                  Session Key <span style={{ color: cssVar('danger') }}>*</span>
+                </label>
+                <input
+                  type="password"
+                  style={inputStyle}
+                  placeholder="sk-ant-sid01-..."
+                  value={credentials.session_key ?? ''}
+                  onChange={(e) => updateField('session_key', e.target.value)}
+                />
+                <div style={{ ...descStyle, marginTop: '0.375rem' }}>
+                  在 claude.ai 的浏览器 Cookie 中获取 sessionKey 值
+                </div>
               </div>
+
+              {oauth && (
+                <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={exchangeSessionKey}
+                    disabled={!credentials.session_key?.trim() || oauthLoading}
+                    style={primaryBtn(!credentials.session_key?.trim() || oauthLoading)}
+                  >
+                    {oauthLoading ? '获取中...' : '获取 OAuth Token'}
+                  </button>
+                  <StatusMessage status={oauthStatus} />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── 浏览器授权方式 ── */}
+          {acquireMethod === 'browser_oauth' && oauth && (
+            <div style={sectionStyle}>
               <div style={{ ...descStyle, marginTop: 0, marginBottom: '0.75rem' }}>
-                先生成授权链接，在浏览器完成授权后，把完整回调 URL 粘贴回来完成交换。
+                生成授权链接 → 浏览器完成授权 → 粘贴回调 URL 完成交换
               </div>
               <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={startOAuth}
-                  disabled={oauthLoading}
-                  style={{
-                    ...inputStyle,
-                    cursor: oauthLoading ? 'not-allowed' : 'pointer',
-                    backgroundColor: cssVar('primary'),
-                    color: 'white',
-                    border: 'none',
-                    fontWeight: 500,
-                    width: 'auto',
-                    opacity: oauthLoading ? 0.6 : 1,
-                  }}
-                >
+                <button type="button" onClick={startOAuth} disabled={oauthLoading} style={primaryBtn(oauthLoading)}>
                   生成授权链接
                 </button>
                 <button
                   type="button"
                   onClick={copyAuthorizeURL}
                   disabled={!authorizeURL || oauthLoading}
-                  style={{
-                    ...inputStyle,
-                    cursor: !authorizeURL || oauthLoading ? 'not-allowed' : 'pointer',
-                    backgroundColor: 'transparent',
-                    color: cssVar('text'),
-                    width: 'auto',
-                    opacity: !authorizeURL || oauthLoading ? 0.6 : 1,
-                  }}
+                  style={outlineBtn(!authorizeURL || oauthLoading)}
                 >
                   复制授权链接
                 </button>
               </div>
-              <div style={{ marginBottom: '0.75rem' }}>
-                <label style={labelStyle}>授权链接</label>
-                <textarea
-                  style={{ ...inputStyle, minHeight: '76px', resize: 'vertical' }}
-                  readOnly
-                  placeholder='点击"生成授权链接"后，这里会显示完整授权地址'
-                  value={authorizeURL}
-                />
-              </div>
-              <div style={{ marginBottom: '0.75rem' }}>
-                <label style={labelStyle}>回调 URL</label>
-                <textarea
-                  style={{ ...inputStyle, minHeight: '76px', resize: 'vertical' }}
-                  placeholder="粘贴完整回调 URL，例如 https://platform.claude.com/oauth/code/callback?code=...&state=..."
-                  value={callbackURL}
-                  onChange={(e) => setCallbackURL(e.target.value)}
-                />
-              </div>
-              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={submitOAuthCallback}
-                  disabled={!callbackURL.trim() || oauthLoading}
-                  style={{
-                    ...inputStyle,
-                    cursor: !callbackURL.trim() || oauthLoading ? 'not-allowed' : 'pointer',
-                    backgroundColor: 'transparent',
-                    color: cssVar('primary'),
-                    border: `1px solid ${cssVar('primary')}`,
-                    width: 'auto',
-                    opacity: !callbackURL.trim() || oauthLoading ? 0.6 : 1,
-                  }}
-                >
-                  完成授权交换
-                </button>
-                {oauthStatus && (
-                  <div
-                    style={{
-                      fontSize: '0.75rem',
-                      color:
-                        oauthStatus.type === 'error'
-                          ? cssVar('danger')
-                          : oauthStatus.type === 'success'
-                            ? cssVar('success')
-                            : cssVar('textSecondary'),
-                    }}
-                  >
-                    {oauthStatus.text}
+              {authorizeURL && (
+                <>
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <label style={labelStyle}>授权链接</label>
+                    <textarea
+                      style={{ ...inputStyle, minHeight: '68px', resize: 'vertical' }}
+                      readOnly
+                      value={authorizeURL}
+                    />
                   </div>
-                )}
-              </div>
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <label style={labelStyle}>回调 URL</label>
+                    <textarea
+                      style={{ ...inputStyle, minHeight: '68px', resize: 'vertical' }}
+                      placeholder="粘贴完整回调 URL"
+                      value={callbackURL}
+                      onChange={(e) => setCallbackURL(e.target.value)}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={submitOAuthCallback}
+                    disabled={!callbackURL.trim() || oauthLoading}
+                    style={outlineBtn(!callbackURL.trim() || oauthLoading)}
+                  >
+                    完成授权交换
+                  </button>
+                </>
+              )}
+              <StatusMessage status={oauthStatus} />
             </div>
           )}
 
-          <div>
-            <label style={labelStyle}>
-              Access Token {!oauth && <span style={{ color: cssVar('danger') }}>*</span>}
-            </label>
-            <input
-              type="password"
-              style={inputStyle}
-              placeholder={oauth ? '授权后自动填充，或手动输入' : 'eyJhbG...'}
-              value={credentials.access_token ?? ''}
-              onChange={(e) => updateField('access_token', e.target.value)}
-            />
-          </div>
-          <div>
-            <label style={labelStyle}>Refresh Token</label>
-            <input
-              type="password"
-              style={inputStyle}
-              placeholder="授权后自动填充"
-              value={credentials.refresh_token ?? ''}
-              onChange={(e) => updateField('refresh_token', e.target.value)}
-            />
-          </div>
-          <div>
-            <label style={labelStyle}>过期时间</label>
-            <input
-              type="text"
-              style={inputStyle}
-              placeholder="授权后自动填充"
-              value={credentials.expires_at ?? ''}
-              onChange={(e) => updateField('expires_at', e.target.value)}
-            />
-          </div>
-        </>
-      )}
-
-      {/* ── Session Key 模式 ── */}
-      {accountType === 'session_key' && (
-        <>
-          <div>
-            <label style={labelStyle}>
-              Session Key <span style={{ color: cssVar('danger') }}>*</span>
-            </label>
-            <input
-              type="password"
-              style={inputStyle}
-              placeholder="sk-ant-sid01-..."
-              value={credentials.session_key ?? ''}
-              onChange={(e) => updateField('session_key', e.target.value)}
-            />
-            <div style={{ ...descStyle, marginTop: '0.375rem' }}>
-              在 claude.ai 的 Cookie 中获取 sessionKey 值
-            </div>
-          </div>
-
-          {oauth && (
-            <div
-              style={{
-                border: `1px solid ${cssVar('glassBorder')}`,
-                borderRadius: cssVar('radiusLg'),
-                padding: '1rem',
-                backgroundColor: cssVar('bgSurface'),
-              }}
-            >
-              <div style={{ fontSize: '0.875rem', fontWeight: 600, color: cssVar('text'), marginBottom: '0.25rem' }}>
-                Token 获取
-              </div>
-              <div style={{ ...descStyle, marginTop: 0, marginBottom: '0.75rem' }}>
-                填入 Session Key 后点击下方按钮，自动通过 claude.ai 获取 OAuth Token。
-              </div>
-              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={exchangeSessionKey}
-                  disabled={!credentials.session_key?.trim() || exchangeLoading}
-                  style={{
-                    ...inputStyle,
-                    cursor: !credentials.session_key?.trim() || exchangeLoading ? 'not-allowed' : 'pointer',
-                    backgroundColor: cssVar('primary'),
-                    color: 'white',
-                    border: 'none',
-                    fontWeight: 500,
-                    width: 'auto',
-                    opacity: !credentials.session_key?.trim() || exchangeLoading ? 0.6 : 1,
-                  }}
-                >
-                  {exchangeLoading ? '获取中...' : '获取 OAuth Token'}
-                </button>
-                {exchangeStatus && (
-                  <div
-                    style={{
-                      fontSize: '0.75rem',
-                      color:
-                        exchangeStatus.type === 'error'
-                          ? cssVar('danger')
-                          : exchangeStatus.type === 'success'
-                            ? cssVar('success')
-                            : cssVar('textSecondary'),
-                    }}
-                  >
-                    {exchangeStatus.text}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* 自动填充的 Token 字段（只读展示） */}
-          {credentials.access_token && (
+          {/* ── Token 字段（自动填充或手动输入） ── */}
+          {credentials.access_token ? (
             <>
               <div>
                 <label style={labelStyle}>Access Token</label>
-                <input
-                  type="password"
-                  style={{ ...inputStyle, opacity: 0.7 }}
-                  value={credentials.access_token ?? ''}
-                  readOnly
-                />
+                <input type="password" style={{ ...inputStyle, opacity: 0.7 }} value={credentials.access_token ?? ''} readOnly />
               </div>
               <div>
                 <label style={labelStyle}>Refresh Token</label>
-                <input
-                  type="password"
-                  style={{ ...inputStyle, opacity: 0.7 }}
-                  value={credentials.refresh_token ?? ''}
-                  readOnly
-                />
+                <input type="password" style={{ ...inputStyle, opacity: 0.7 }} value={credentials.refresh_token ?? ''} readOnly />
               </div>
               <div>
                 <label style={labelStyle}>过期时间</label>
-                <input
-                  type="text"
-                  style={{ ...inputStyle, opacity: 0.7 }}
-                  value={credentials.expires_at ?? ''}
-                  readOnly
-                />
+                <input type="text" style={{ ...inputStyle, opacity: 0.7 }} value={credentials.expires_at ?? ''} readOnly />
               </div>
             </>
+          ) : (
+            mode === 'edit' && (
+              <>
+                <div>
+                  <label style={labelStyle}>Access Token</label>
+                  <input
+                    type="password"
+                    style={inputStyle}
+                    placeholder="手动输入或通过上方获取"
+                    value={credentials.access_token ?? ''}
+                    onChange={(e) => updateField('access_token', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle}>Refresh Token</label>
+                  <input
+                    type="password"
+                    style={inputStyle}
+                    placeholder="手动输入"
+                    value={credentials.refresh_token ?? ''}
+                    onChange={(e) => updateField('refresh_token', e.target.value)}
+                  />
+                </div>
+              </>
+            )
           )}
+
+          {/* ── Base URL ── */}
+          <div>
+            <label style={labelStyle}>Base URL</label>
+            <input
+              type="text"
+              style={inputStyle}
+              placeholder="https://api.anthropic.com"
+              value={credentials.base_url ?? ''}
+              onChange={(e) => updateField('base_url', e.target.value)}
+            />
+            <div style={{ ...descStyle, marginTop: '0.375rem' }}>留空使用官方 Anthropic API</div>
+          </div>
         </>
       )}
     </div>

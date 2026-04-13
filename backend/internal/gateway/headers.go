@@ -42,6 +42,7 @@ const CountTokensBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInter
 const HaikuBetaHeader = BetaOAuth + "," + BetaInterleavedThinking
 
 // DefaultHeaders Claude Code 客户端默认请求头（用于 OAuth 模式伪装）
+// key 使用真实 Claude CLI wire-format 大小写（来自抓包）
 var DefaultHeaders = map[string]string{
 	"User-Agent":                                "claude-cli/2.1.22 (external, cli)",
 	"X-Stainless-Lang":                          "js",
@@ -52,8 +53,26 @@ var DefaultHeaders = map[string]string{
 	"X-Stainless-Runtime-Version":               "v24.13.0",
 	"X-Stainless-Retry-Count":                   "0",
 	"X-Stainless-Timeout":                       "600",
-	"X-App":                                     "cli",
-	"Anthropic-Dangerous-Direct-Browser-Access": "true",
+	"x-app":                                     "cli",                // 小写（SDK 原始格式）
+	"anthropic-dangerous-direct-browser-access": "true",              // 小写（SDK 原始格式）
+}
+
+// ──────────────────────────────────────────────────────
+// Wire-format Header 设置
+// ──────────────────────────────────────────────────────
+//
+// Anthropic 会检测 HTTP header 的大小写是否与真实 Claude CLI 一致。
+// Go 的 req.Header.Set() 会自动转为 Title-Case（如 "authorization" → "Authorization"），
+// 但真实 Claude CLI (Node.js) 发送的是小写形式。必须绕过 Go 的规范化。
+// 参考 sub2api 的 header_util.go 实现。
+
+// setRawHeader 绕过 Go 的 header 大小写规范化，直接设置原始 key
+func setRawHeader(h http.Header, key, value string) {
+	// 先删除 Go canonical 形式
+	h.Del(key)
+	// 再删除 raw key 形式（防止重复）
+	delete(h, key)
+	h[key] = []string{value}
 }
 
 // ──────────────────────────────────────────────────────
@@ -66,6 +85,7 @@ func isHaikuModel(model string) bool {
 }
 
 // setAnthropicAuthHeaders 根据账号类型和模型设置认证头
+// 使用 wire-format 大小写（与真实 Claude CLI 流量一致）
 func setAnthropicAuthHeaders(req *http.Request, account *sdk.Account, clientHeaders http.Header, model string) {
 	switch account.Type {
 	case "apikey":
@@ -86,9 +106,10 @@ func setAnthropicAuthHeaders(req *http.Request, account *sdk.Account, clientHead
 		}
 		req.Header.Set("anthropic-beta", beta)
 
-	case "oauth", "session_key":
+	case "oauth", "session_key", "setup_token":
 		token := account.Credentials["access_token"]
-		req.Header.Set("Authorization", "Bearer "+token)
+		// OAuth 使用小写 header key（与真实 Claude CLI 一致）
+		setRawHeader(req.Header, "authorization", "Bearer "+token)
 
 		// OAuth 模式：根据模型选择 beta header
 		var beta string
@@ -100,22 +121,41 @@ func setAnthropicAuthHeaders(req *http.Request, account *sdk.Account, clientHead
 		if clientBeta := clientHeaders.Get("anthropic-beta"); clientBeta != "" {
 			beta = mergeBetas(beta, filterDroppedBetas(clientBeta))
 		}
-		req.Header.Set("anthropic-beta", beta)
+		setRawHeader(req.Header, "anthropic-beta", beta)
 
-		// 设置 Claude Code 默认伪装头
+		// 设置 Claude Code 默认伪装头（保持 wire-format 大小写）
 		for k, v := range DefaultHeaders {
-			req.Header.Set(k, v)
+			if isRawCaseHeader(k) {
+				setRawHeader(req.Header, k, v)
+			} else {
+				req.Header.Set(k, v)
+			}
 		}
+
+		// 流式请求加上 helper-method
+		setRawHeader(req.Header, "Accept", "application/json")
 	}
 
-	// 设置 anthropic-version
+	// Anthropic SDK 自身设置的 header 全小写
 	version := clientHeaders.Get("anthropic-version")
 	if version == "" {
 		version = DefaultAnthropicVersion
 	}
-	req.Header.Set("anthropic-version", version)
+	setRawHeader(req.Header, "anthropic-version", version)
+	setRawHeader(req.Header, "content-type", "application/json")
+}
 
-	req.Header.Set("Content-Type", "application/json")
+// isRawCaseHeader 判断该 header key 是否需要保持原始大小写（小写形式）
+func isRawCaseHeader(key string) bool {
+	lower := strings.ToLower(key)
+	// Anthropic SDK 自设的 header 使用小写
+	switch lower {
+	case "anthropic-dangerous-direct-browser-access", "x-app", "content-type",
+		"anthropic-version", "anthropic-beta", "authorization",
+		"accept-language", "accept-encoding", "x-client-request-id":
+		return true
+	}
+	return false
 }
 
 // filterDroppedBetas 从 beta header 中移除需要丢弃的 beta token
