@@ -30,7 +30,6 @@ const (
 	OAuthRedirectURI  = "https://platform.claude.com/oauth/code/callback"
 	OAuthScopeBrowser   = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 	OAuthScopeAPI       = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
-	OAuthScopeInference = "user:inference" // setup_token 仅推理 scope
 
 	// Session Key 通过 claude.ai 获取 org 和 authorization code 的端点
 	claudeAIBaseURL = "https://claude.ai"
@@ -201,18 +200,13 @@ type AccountInfo struct {
 	EmailAddress string `json:"email_address"`
 }
 
-// ExchangeSessionKeyForSetupToken 通过 Session Key 获取 Setup Token（仅 inference scope，1年有效期）
-func (g *AnthropicGateway) ExchangeSessionKeyForSetupToken(ctx context.Context, sessionKey, proxyURL string) (*TokenResponse, error) {
-	return g.exchangeSessionKeyWithScope(ctx, sessionKey, proxyURL, OAuthScopeInference, true)
-}
-
 // ExchangeSessionKeyForToken 通过 Session Key 获取 OAuth Token（完整 scope）
 // 完整流程：
 //  1. GET claude.ai/api/organizations → 获取 org UUID
 //  2. POST claude.ai/v1/oauth/{orgUUID}/authorize → 获取 authorization code
 //  3. POST platform.claude.com/v1/oauth/token → 用 code 换 access_token
 func (g *AnthropicGateway) ExchangeSessionKeyForToken(ctx context.Context, sessionKey, proxyURL string) (*TokenResponse, error) {
-	return g.exchangeSessionKeyWithScope(ctx, sessionKey, proxyURL, OAuthScopeAPI, false)
+	return g.exchangeSessionKeyWithScope(ctx, sessionKey, proxyURL, OAuthScopeAPI)
 }
 
 // buildOAuthReqClient 构建用于 claude.ai 请求的 req 客户端（Chrome TLS 指纹 + 绕过 Cloudflare）
@@ -237,7 +231,7 @@ func (g *AnthropicGateway) buildOAuthClient(proxyURL string) *http.Client {
 }
 
 // exchangeSessionKeyWithScope 通用的 Session Key → OAuth Token 流程
-func (g *AnthropicGateway) exchangeSessionKeyWithScope(ctx context.Context, sessionKey, proxyURL, scope string, isSetupToken bool) (*TokenResponse, error) {
+func (g *AnthropicGateway) exchangeSessionKeyWithScope(ctx context.Context, sessionKey, proxyURL, scope string) (*TokenResponse, error) {
 	// claude.ai 请求使用 Chrome 指纹客户端（绕过 Cloudflare）
 	reqClient := buildOAuthReqClient(proxyURL)
 
@@ -267,7 +261,7 @@ func (g *AnthropicGateway) exchangeSessionKeyWithScope(ctx context.Context, sess
 
 	// Step 3: 用 code 换 token（platform.claude.com 无 Cloudflare，用标准 HTTP 客户端）
 	httpClient := g.buildOAuthClient(proxyURL)
-	tokenResp, err := g.exchangeCodeForTokenEx(ctx, httpClient, authCode, codeVerifier, state, isSetupToken)
+	tokenResp, err := g.exchangeCodeForToken(ctx, httpClient, authCode, codeVerifier, state)
 	if err != nil {
 		return nil, fmt.Errorf("换取 token 失败: %w", err)
 	}
@@ -379,13 +373,8 @@ func (g *AnthropicGateway) getAuthorizationCodeWithScope(ctx context.Context, cl
 	return fullCode, nil
 }
 
-// exchangeCodeForToken 用授权码换取 token（标准模式）
+// exchangeCodeForToken 用授权码换取 token
 func (g *AnthropicGateway) exchangeCodeForToken(ctx context.Context, client *http.Client, code, codeVerifier, state string) (*TokenResponse, error) {
-	return g.exchangeCodeForTokenEx(ctx, client, code, codeVerifier, state, false)
-}
-
-// exchangeCodeForTokenEx 用授权码换取 token（支持 setup_token 的 expires_in）
-func (g *AnthropicGateway) exchangeCodeForTokenEx(ctx context.Context, client *http.Client, code, codeVerifier, state string, isSetupToken bool) (*TokenResponse, error) {
 	// 解析 code（可能包含 state: "authCode#state"）
 	authCode := code
 	codeState := ""
@@ -404,11 +393,6 @@ func (g *AnthropicGateway) exchangeCodeForTokenEx(ctx context.Context, client *h
 	if codeState != "" {
 		reqBody["state"] = codeState
 	}
-	// Setup Token：请求 1 年有效期
-	if isSetupToken {
-		reqBody["expires_in"] = 31536000 // 365 天
-	}
-
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err

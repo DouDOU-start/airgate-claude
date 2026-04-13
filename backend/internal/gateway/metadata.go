@@ -41,35 +41,13 @@ func BuildPluginInfo() sdk.PluginInfo {
 			},
 			{
 				Key:         "oauth",
-				Label:       "OAuth 令牌",
-				Description: "使用 OAuth Access Token 访问（完整 scope，支持 session/mcp）",
+				Label:       "OAuth",
+				Description: "通过 Session Key 或浏览器授权获取 OAuth Token",
 				Fields: []sdk.CredentialField{
+					{Key: "session_key", Label: "Session Key", Type: "password", Required: false, Placeholder: "sk-ant-sid01-...（可选，用于自动获取 Token）"},
 					{Key: "access_token", Label: "Access Token", Type: "password", Required: false, Placeholder: "自动获取"},
 					{Key: "refresh_token", Label: "Refresh Token", Type: "password", Required: false, Placeholder: "自动获取"},
 					{Key: "expires_at", Label: "过期时间", Type: "text", Required: false, Placeholder: "自动填充"},
-					{Key: "base_url", Label: "API 地址", Type: "text", Required: false, Placeholder: "https://api.anthropic.com"},
-				},
-			},
-			{
-				Key:         "setup_token",
-				Label:       "Setup Token",
-				Description: "仅推理 scope 的长期 OAuth 令牌（有效期 1 年）",
-				Fields: []sdk.CredentialField{
-					{Key: "access_token", Label: "Access Token", Type: "password", Required: false, Placeholder: "自动获取"},
-					{Key: "refresh_token", Label: "Refresh Token", Type: "password", Required: false, Placeholder: "自动获取"},
-					{Key: "expires_at", Label: "过期时间", Type: "text", Required: false, Placeholder: "自动填充"},
-					{Key: "base_url", Label: "API 地址", Type: "text", Required: false, Placeholder: "https://api.anthropic.com"},
-				},
-			},
-			{
-				Key:         "session_key",
-				Label:       "Session Key",
-				Description: "使用 claude.ai 的 Session Key 自动获取 OAuth 令牌",
-				Fields: []sdk.CredentialField{
-					{Key: "session_key", Label: "Session Key", Type: "password", Required: true, Placeholder: "sk-ant-sid01-..."},
-					{Key: "access_token", Label: "Access Token", Type: "password", Required: false, Placeholder: "自动获取", EditDisabled: true},
-					{Key: "refresh_token", Label: "Refresh Token", Type: "password", Required: false, Placeholder: "自动获取", EditDisabled: true},
-					{Key: "expires_at", Label: "过期时间", Type: "text", Required: false, Placeholder: "自动填充", EditDisabled: true},
 					{Key: "base_url", Label: "API 地址", Type: "text", Required: false, Placeholder: "https://api.anthropic.com"},
 				},
 			},

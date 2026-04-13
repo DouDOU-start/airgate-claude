@@ -238,14 +238,7 @@ func (g *AnthropicGateway) HandleRequest(ctx context.Context, _, path, _ string,
 			}
 			tokenResp, err = g.HandleOAuthCallback(ctx, code, state, raw.ProxyURL)
 		} else if raw.SessionKey != "" {
-			if raw.Scope == "inference" {
-				// Setup Token 模式
-				tokenResp, err = g.ExchangeSessionKeyForSetupToken(ctx, raw.SessionKey, raw.ProxyURL)
-				accountType = "setup_token"
-			} else {
-				// 完整 OAuth 模式
-				tokenResp, err = g.ExchangeSessionKeyForToken(ctx, raw.SessionKey, raw.ProxyURL)
-			}
+			tokenResp, err = g.ExchangeSessionKeyForToken(ctx, raw.SessionKey, raw.ProxyURL)
 		} else {
 			return http.StatusBadRequest, nil, jsonError("缺少 callback_url 或 session_key 参数"), nil
 		}
@@ -375,16 +368,8 @@ func (g *AnthropicGateway) HandleRequest(ctx context.Context, _, path, _ string,
 			return http.StatusBadRequest, nil, jsonError("缺少 session_key 参数"), nil
 		}
 
-		var tokenResp *TokenResponse
-		var err error
 		accountType := "oauth"
-
-		if raw.Scope == "inference" {
-			tokenResp, err = g.ExchangeSessionKeyForSetupToken(ctx, raw.SessionKey, raw.ProxyURL)
-			accountType = "setup_token"
-		} else {
-			tokenResp, err = g.ExchangeSessionKeyForToken(ctx, raw.SessionKey, raw.ProxyURL)
-		}
+		tokenResp, err := g.ExchangeSessionKeyForToken(ctx, raw.SessionKey, raw.ProxyURL)
 		if err != nil {
 			return http.StatusInternalServerError, nil, jsonError(err.Error()), nil
 		}
@@ -433,16 +418,8 @@ func (g *AnthropicGateway) HandleRequest(ctx context.Context, _, path, _ string,
 
 		results := make([]batchResult, 0, len(raw.SessionKeys))
 		for _, sk := range raw.SessionKeys {
-			var tokenResp *TokenResponse
-			var err error
 			acctType := "oauth"
-
-			if raw.Scope == "inference" {
-				tokenResp, err = g.ExchangeSessionKeyForSetupToken(ctx, sk, raw.ProxyURL)
-				acctType = "setup_token"
-			} else {
-				tokenResp, err = g.ExchangeSessionKeyForToken(ctx, sk, raw.ProxyURL)
-			}
+			tokenResp, err := g.ExchangeSessionKeyForToken(ctx, sk, raw.ProxyURL)
 
 			if err != nil {
 				results = append(results, batchResult{Status: "failed", Error: err.Error()})
@@ -587,7 +564,7 @@ func buildCountTokensHeaders(req *http.Request, account *sdk.Account) {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-beta", APIKeyBetaHeader+","+BetaTokenCounting)
-	case "oauth", "session_key", "setup_token":
+	case "oauth", "session_key":
 		token := account.Credentials["access_token"]
 		setRawHeader(req.Header, "authorization", "Bearer "+token)
 		setRawHeader(req.Header, "anthropic-beta", CountTokensBetaHeader)

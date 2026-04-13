@@ -130,7 +130,7 @@ func (p *FingerprintTransportPool) Close() {
 func getHTTPClient(stdPool *StandardTransportPool, fpPool *FingerprintTransportPool, accountType, proxyURL string) *http.Client {
 	var transport http.RoundTripper
 	switch accountType {
-	case "oauth", "session_key", "setup_token":
+	case "oauth", "session_key":
 		if fpPool != nil {
 			transport = fpPool.Get(proxyURL)
 		} else {

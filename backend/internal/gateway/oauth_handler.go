@@ -161,16 +161,8 @@ func (h *OAuthDevHandler) handleCookieAuth(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var tokenResp *TokenResponse
-	var err error
 	accountType := "oauth"
-
-	if raw.Scope == "inference" {
-		tokenResp, err = h.Gateway.ExchangeSessionKeyForSetupToken(r.Context(), raw.SessionKey, raw.ProxyURL)
-		accountType = "setup_token"
-	} else {
-		tokenResp, err = h.Gateway.ExchangeSessionKeyForToken(r.Context(), raw.SessionKey, raw.ProxyURL)
-	}
+	tokenResp, err := h.Gateway.ExchangeSessionKeyForToken(r.Context(), raw.SessionKey, raw.ProxyURL)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
 		return
@@ -229,16 +221,8 @@ func (h *OAuthDevHandler) handleBatchCookieAuth(w http.ResponseWriter, r *http.R
 
 	results := make([]batchResult, 0, len(raw.SessionKeys))
 	for _, sk := range raw.SessionKeys {
-		var tokenResp *TokenResponse
-		var err error
 		acctType := "oauth"
-
-		if raw.Scope == "inference" {
-			tokenResp, err = h.Gateway.ExchangeSessionKeyForSetupToken(r.Context(), sk, raw.ProxyURL)
-			acctType = "setup_token"
-		} else {
-			tokenResp, err = h.Gateway.ExchangeSessionKeyForToken(r.Context(), sk, raw.ProxyURL)
-		}
+		tokenResp, err := h.Gateway.ExchangeSessionKeyForToken(r.Context(), sk, raw.ProxyURL)
 
 		if err != nil {
 			results = append(results, batchResult{Status: "failed", Error: err.Error()})

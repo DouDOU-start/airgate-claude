@@ -49,10 +49,8 @@ func (g *AnthropicGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequ
 	switch account.Type {
 	case "apikey":
 		return g.forwardAPIKey(ctx, req, path)
-	case "oauth", "setup_token":
+	case "oauth", "session_key": // session_key 向后兼容，新账号统一为 oauth
 		return g.forwardOAuth(ctx, req, path)
-	case "session_key":
-		return g.forwardSessionKey(ctx, req, path)
 	default:
 		return nil, fmt.Errorf("未知的账号类型: %s", account.Type)
 	}
@@ -186,16 +184,6 @@ func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReq
 		}
 	}
 	return result, fwdErr
-}
-
-// ──────────────────────────────────────────────────────
-// Session Key 模式：自动换 token 或刷新后走 OAuth 流程
-// ──────────────────────────────────────────────────────
-
-func (g *AnthropicGateway) forwardSessionKey(ctx context.Context, req *sdk.ForwardRequest, path string) (*sdk.ForwardResult, error) {
-	// Session Key 的 token exchange 已由 tokenManager.ensureValidToken 处理
-	// 直接复用 OAuth 转发逻辑（tokenManager 会在 forwardOAuth 中自动检测并 exchange）
-	return g.forwardOAuth(ctx, req, path)
 }
 
 // Token 刷新逻辑已迁移到 token_manager.go

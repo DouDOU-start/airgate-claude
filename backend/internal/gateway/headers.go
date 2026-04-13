@@ -106,7 +106,7 @@ func setAnthropicAuthHeaders(req *http.Request, account *sdk.Account, clientHead
 		}
 		req.Header.Set("anthropic-beta", beta)
 
-	case "oauth", "session_key", "setup_token":
+	case "oauth", "session_key":
 		token := account.Credentials["access_token"]
 		// OAuth 使用小写 header key（与真实 Claude CLI 一致）
 		setRawHeader(req.Header, "authorization", "Bearer "+token)

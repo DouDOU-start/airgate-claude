@@ -94,24 +94,17 @@ const sectionStyle: React.CSSProperties = {
 type UICategory = 'claude_code' | 'claude_console';
 
 /** 后端账号类型 */
-type AccountType = 'apikey' | 'oauth' | 'setup_token' | 'session_key';
+type AccountType = 'apikey' | 'oauth' | 'session_key';
 
 /** Claude Code 内部的获取方式 */
 type AcquireMethod = 'session_key' | 'browser_oauth';
 
-/** Claude Code 内部的 scope 类型 */
-type ScopeType = 'full' | 'inference';
-
 function detectCategory(accountType?: string, credentials?: Record<string, string>): UICategory {
   if (accountType === 'apikey') return 'claude_console';
-  if (accountType === 'oauth' || accountType === 'setup_token' || accountType === 'session_key') return 'claude_code';
+  if (accountType === 'oauth' || accountType === 'session_key') return 'claude_code';
   if (credentials?.api_key) return 'claude_console';
   if (credentials?.session_key || credentials?.access_token) return 'claude_code';
   return 'claude_code';
-}
-
-function detectScopeType(accountType?: string): ScopeType {
-  return accountType === 'setup_token' ? 'inference' : 'full';
 }
 
 function detectAcquireMethod(accountType?: string, credentials?: Record<string, string>): AcquireMethod {
@@ -154,7 +147,6 @@ export function AccountForm({
   const [category, setCategory] = useState<UICategory>(
     detectCategory(propType, credentials),
   );
-  const [scopeType, setScopeType] = useState<ScopeType>(detectScopeType(propType));
   const [acquireMethod, setAcquireMethod] = useState<AcquireMethod>(
     detectAcquireMethod(propType, credentials),
   );
@@ -172,13 +164,11 @@ export function AccountForm({
     [credentials, onChange],
   );
 
-  // 根据 category + scope 推导后端 account type
+  // 根据 category + method 推导后端 account type
   const resolveAccountType = useCallback(
-    (cat: UICategory, scope: ScopeType, method: AcquireMethod): AccountType => {
+    (cat: UICategory, _method: AcquireMethod): AccountType => {
       if (cat === 'claude_console') return 'apikey';
-      if (scope === 'inference') return 'setup_token';
-      if (method === 'session_key') return 'session_key';
-      return 'oauth';
+      return 'oauth'; // Session Key 换取后也是 OAuth 类型
     },
     [],
   );
@@ -194,22 +184,12 @@ export function AccountForm({
         onAccountTypeChange?.('apikey');
         onChange({ api_key: '', base_url: '' });
       } else {
-        const type = resolveAccountType(cat, scopeType, acquireMethod);
+        const type = resolveAccountType(cat, acquireMethod);
         onAccountTypeChange?.(type);
         onChange({ session_key: '', access_token: '', refresh_token: '', expires_at: '', base_url: '' });
       }
     },
-    [onChange, onAccountTypeChange, resolveAccountType, scopeType, acquireMethod],
-  );
-
-  // 切换 scope（full / inference）
-  const handleScopeChange = useCallback(
-    (scope: ScopeType) => {
-      setScopeType(scope);
-      const type = resolveAccountType('claude_code', scope, acquireMethod);
-      onAccountTypeChange?.(type);
-    },
-    [onAccountTypeChange, resolveAccountType, acquireMethod],
+    [onChange, onAccountTypeChange, resolveAccountType, acquireMethod],
   );
 
   // 切换获取方式
@@ -219,10 +199,10 @@ export function AccountForm({
       setAuthorizeURL('');
       setCallbackURL('');
       setOauthStatus(null);
-      const type = resolveAccountType('claude_code', scopeType, method);
+      const type = resolveAccountType('claude_code', method);
       onAccountTypeChange?.(type);
     },
-    [onAccountTypeChange, resolveAccountType, scopeType],
+    [onAccountTypeChange, resolveAccountType],
   );
 
   // ── OAuth 浏览器流程 ──
@@ -276,7 +256,6 @@ export function AccountForm({
     setOauthStatus({ type: 'info', text: '正在通过 Session Key 获取 OAuth Token...' });
     try {
       const payload: Record<string, string> = { session_key: credentials.session_key };
-      if (scopeType === 'inference') payload.scope = 'inference';
       const result = await oauth.exchange(JSON.stringify(payload));
       onChange({ ...credentials, ...result.credentials });
       if (result.accountName) onSuggestedName?.(result.accountName);
@@ -287,7 +266,7 @@ export function AccountForm({
     } finally {
       setOauthLoading(false);
     }
-  }, [oauth, credentials, onChange, onSuggestedName, onAccountTypeChange, scopeType]);
+  }, [oauth, credentials, onChange, onSuggestedName, onAccountTypeChange]);
 
   // ── 按钮样式 ──
   const primaryBtn = (disabled: boolean): React.CSSProperties => ({
@@ -323,7 +302,7 @@ export function AccountForm({
             onClick={() => handleCategoryChange('claude_code')}
           >
             <div style={{ fontSize: '0.875rem', fontWeight: 500, color: cssVar('text') }}>Claude Code</div>
-            <div style={descStyle}>OAuth / Setup Token</div>
+            <div style={descStyle}>OAuth / Session Key</div>
           </div>
           <div
             style={category === 'claude_console' ? cardActiveStyle : cardStyle}
@@ -371,30 +350,6 @@ export function AccountForm({
       {/* ══════════════════════════════════════════════ */}
       {category === 'claude_code' && (
         <>
-          {/* ── Token 类型选择 ── */}
-          <div>
-            <span style={labelStyle}>Token 类型</span>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <span
-                style={scopeType === 'full' ? pillActiveStyle : pillStyle}
-                onClick={() => handleScopeChange('full')}
-              >
-                OAuth 令牌
-              </span>
-              <span
-                style={scopeType === 'inference' ? pillActiveStyle : pillStyle}
-                onClick={() => handleScopeChange('inference')}
-              >
-                Setup Token
-              </span>
-            </div>
-            <div style={{ ...descStyle, marginTop: '0.375rem' }}>
-              {scopeType === 'full'
-                ? '完整 scope，支持 session/mcp 等全部功能'
-                : '仅推理 scope（user:inference），有效期 1 年'}
-            </div>
-          </div>
-
           {/* ── 获取方式选择 ── */}
           <div>
             <span style={labelStyle}>获取方式</span>
