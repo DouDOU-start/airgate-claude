@@ -1,4 +1,4 @@
-module github.com/DouDOU-start/airgate-anthropic/backend
+module github.com/DouDOU-start/airgate-claude/backend
 
 go 1.25.7
 

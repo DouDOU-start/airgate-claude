@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/DouDOU-start/airgate-anthropic/backend/internal/gateway"
+	"github.com/DouDOU-start/airgate-claude/backend/internal/gateway"
 	sdkgrpc "github.com/DouDOU-start/airgate-sdk/grpc"
 )
 

@@ -8,7 +8,7 @@ import sdk "github.com/DouDOU-start/airgate-sdk"
 var PluginVersion = "1.0.0"
 
 const (
-	PluginID             = "gateway-anthropic"
+	PluginID             = "gateway-claude"
 	PluginDisplayName    = "Claude 网关"
 	PluginDescription    = "Claude Messages API 网关"
 	PluginAuthor         = "airgate"

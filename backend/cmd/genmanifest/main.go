@@ -9,7 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/DouDOU-start/airgate-anthropic/backend/internal/gateway"
+	"github.com/DouDOU-start/airgate-claude/backend/internal/gateway"
 	sdk "github.com/DouDOU-start/airgate-sdk"
 )
 

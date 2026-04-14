@@ -22,7 +22,7 @@ build-web: ## 构建前端
 build-backend: ## 构建后端（自动复制前端产物）
 	rm -rf backend/internal/gateway/webdist
 	cp -r web/dist backend/internal/gateway/webdist
-	cd backend && $(GO) build -o ../bin/gateway-anthropic .
+	cd backend && $(GO) build -o ../bin/gateway-claude .
 
 manifest: ## 重新生成 plugin.yaml
 	cd backend && $(GO) run ./cmd/genmanifest
@@ -30,8 +30,8 @@ manifest: ## 重新生成 plugin.yaml
 release: build-web ## 编译 Linux 版本（用于上传到 Docker 部署）
 	rm -rf backend/internal/gateway/webdist
 	cp -r web/dist backend/internal/gateway/webdist
-	cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -buildvcs=false -trimpath -o ../bin/gateway-anthropic-linux-amd64 .
-	@echo "构建完成: bin/gateway-anthropic-linux-amd64"
+	cd backend && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -buildvcs=false -trimpath -o ../bin/gateway-claude-linux-amd64 .
+	@echo "构建完成: bin/gateway-claude-linux-amd64"
 	@echo "通过 AirGate 管理界面 → 插件管理 → 安装插件 → 上传安装"
 
 # ===================== 开发 =====================

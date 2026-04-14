@@ -35,7 +35,7 @@ AirGate Anthropic 是 [airgate-core](https://github.com/DouDOU-start/airgate-cor
                                    | go-plugin (gRPC)
                                    v
                   +--------------------------------------+
-                  |    airgate-anthropic (本仓库)         |
+                  |    airgate-claude (本仓库)         |
                   |                                      |
                   |   apikey -----> api.anthropic.com    |
                   |   oauth  -----> api.anthropic.com    |
@@ -157,8 +157,8 @@ AirGate Anthropic 是 [airgate-core](https://github.com/DouDOU-start/airgate-cor
 ```bash
 git clone https://github.com/DouDOU-start/airgate-sdk.git
 git clone https://github.com/DouDOU-start/airgate-core.git
-git clone https://github.com/DouDOU-start/airgate-anthropic.git
-cd airgate-anthropic
+git clone https://github.com/DouDOU-start/airgate-claude.git
+cd airgate-claude
 ```
 
 把本插件以 dev 模式挂到 core：
@@ -167,8 +167,8 @@ cd airgate-anthropic
 # airgate-core/backend/config.yaml
 plugins:
   dev:
-    - name: gateway-anthropic
-      path: /absolute/path/to/airgate-anthropic/backend
+    - name: gateway-claude
+      path: /absolute/path/to/airgate-claude/backend
 ```
 
 然后 `cd airgate-core/backend && go run ./cmd/server`，core 会自动启动本插件。
@@ -184,7 +184,7 @@ DevServer 提供完整的 OAuth/Console 端点，可独立测试授权流程和�
 ## 项目结构
 
 ```text
-airgate-anthropic/
+airgate-claude/
 ├── backend/
 │   ├── main.go                            # gRPC 插件入口
 │   ├── cmd/
