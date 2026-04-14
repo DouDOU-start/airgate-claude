@@ -10,31 +10,33 @@ import (
 
 // Spec 单个模型的完整元数据
 type Spec struct {
-	Name            string  // 展示名称
-	ContextWindow   int     // 上下文窗口（tokens）
-	MaxOutputTokens int     // 最大输出 tokens
-	InputPrice      float64 // 输入价格（$/1M tokens）
-	CachedPrice     float64 // 缓存输入价格（$/1M tokens）
-	OutputPrice     float64 // 输出价格（$/1M tokens）
+	Name                 string  // 展示名称
+	ContextWindow        int     // 上下文窗口（tokens）
+	MaxOutputTokens      int     // 最大输出 tokens
+	InputPrice           float64 // 输入价格（$/1M tokens）
+	CachedPrice          float64 // 缓存读取价格（$/1M tokens，0.1x input）
+	CacheCreationPrice   float64 // 缓存写入价格 5m TTL（$/1M tokens，1.25x input）
+	CacheCreation1hPrice float64 // 缓存写入价格 1h TTL（$/1M tokens，2.00x input）
+	OutputPrice          float64 // 输出价格（$/1M tokens）
 }
 
-// modelRegistry 全局模型注册表
-// 字段顺序：Name, ContextWindow, MaxOutputTokens, InputPrice, CachedPrice, OutputPrice
 // modelRegistry 全局模型注册表（价格对齐 Anthropic 官方 2026-04 定价）
-// 字段顺序：Name, ContextWindow, MaxOutputTokens, InputPrice, CachedPrice, OutputPrice
+// 字段顺序：Name, ContextWindow, MaxOutputTokens, InputPrice, CachedPrice, CacheCreationPrice, CacheCreation1hPrice, OutputPrice
 // 价格单位：美元 / 百万 token
-// CachedPrice = Cache Hits & Refreshes（0.1x base input）
+// CachedPrice          = Cache Read / Hits & Refreshes（0.1x base input）
+// CacheCreationPrice   = Cache Write 5m TTL（1.25x base input）
+// CacheCreation1hPrice = Cache Write 1h TTL（2.00x base input）
 var modelRegistry = map[string]Spec{
-	// Opus — $5 / $0.50 / $25
-	"claude-opus-4-6":          {"Claude Opus 4.6", 1000000, 128000, 5.0, 0.5, 25.0},
-	"claude-opus-4-5-20251101": {"Claude Opus 4.5", 200000, 64000, 5.0, 0.5, 25.0},
-	"claude-opus-4-1-20250805": {"Claude Opus 4.1", 200000, 32000, 15.0, 1.5, 75.0},
-	// Sonnet — $3 / $0.30 / $15
-	"claude-sonnet-4-6":          {"Claude Sonnet 4.6", 1000000, 64000, 3.0, 0.3, 15.0},
-	"claude-sonnet-4-5-20250929": {"Claude Sonnet 4.5", 200000, 64000, 3.0, 0.3, 15.0},
-	"claude-sonnet-4-20250514":   {"Claude Sonnet 4", 200000, 64000, 3.0, 0.3, 15.0},
-	// Haiku — $1 / $0.10 / $5
-	"claude-haiku-4-5-20251001": {"Claude Haiku 4.5", 200000, 64000, 1.0, 0.1, 5.0},
+	// Opus — input $5 / cache_read $0.50 / write_5m $6.25 / write_1h $10 / output $25
+	"claude-opus-4-6":          {"Claude Opus 4.6", 1000000, 128000, 5.0, 0.5, 6.25, 10.0, 25.0},
+	"claude-opus-4-5-20251101": {"Claude Opus 4.5", 200000, 64000, 5.0, 0.5, 6.25, 10.0, 25.0},
+	"claude-opus-4-1-20250805": {"Claude Opus 4.1", 200000, 32000, 15.0, 1.5, 18.75, 30.0, 75.0},
+	// Sonnet — input $3 / cache_read $0.30 / write_5m $3.75 / write_1h $6 / output $15
+	"claude-sonnet-4-6":          {"Claude Sonnet 4.6", 1000000, 64000, 3.0, 0.3, 3.75, 6.0, 15.0},
+	"claude-sonnet-4-5-20250929": {"Claude Sonnet 4.5", 200000, 64000, 3.0, 0.3, 3.75, 6.0, 15.0},
+	"claude-sonnet-4-20250514":   {"Claude Sonnet 4", 200000, 64000, 3.0, 0.3, 3.75, 6.0, 15.0},
+	// Haiku — input $1 / cache_read $0.10 / write_5m $1.25 / write_1h $2 / output $5
+	"claude-haiku-4-5-20251001": {"Claude Haiku 4.5", 200000, 64000, 1.0, 0.1, 1.25, 2.0, 5.0},
 }
 
 // ModelIDOverrides 短名到长名的映射
@@ -66,13 +68,15 @@ func AllModelSpecs() []sdk.ModelInfo {
 	models := make([]sdk.ModelInfo, 0, len(modelRegistry))
 	for id, spec := range modelRegistry {
 		models = append(models, sdk.ModelInfo{
-			ID:               id,
-			Name:             spec.Name,
-			ContextWindow:    spec.ContextWindow,
-			MaxOutputTokens:  spec.MaxOutputTokens,
-			InputPrice:       spec.InputPrice,
-			OutputPrice:      spec.OutputPrice,
-			CachedInputPrice: spec.CachedPrice,
+			ID:                   id,
+			Name:                 spec.Name,
+			ContextWindow:        spec.ContextWindow,
+			MaxOutputTokens:      spec.MaxOutputTokens,
+			InputPrice:           spec.InputPrice,
+			OutputPrice:          spec.OutputPrice,
+			CachedInputPrice:     spec.CachedPrice,
+			CacheCreationPrice:   spec.CacheCreationPrice,
+			CacheCreation1hPrice: spec.CacheCreation1hPrice,
 		})
 	}
 	sort.Slice(models, func(i, j int) bool {
@@ -83,13 +87,15 @@ func AllModelSpecs() []sdk.ModelInfo {
 
 // fallbackModel 兜底模型（未知模型按 Sonnet 4.6 计费，最常用的中端模型）
 var fallbackModel = sdk.ModelInfo{
-	ID:               "claude-sonnet-4-6",
-	Name:             "Claude Sonnet 4.6 (fallback)",
-	ContextWindow:    1000000,
-	MaxOutputTokens:  64000,
-	InputPrice:       3.0,
-	OutputPrice:      15.0,
-	CachedInputPrice: 0.3,
+	ID:                   "claude-sonnet-4-6",
+	Name:                 "Claude Sonnet 4.6 (fallback)",
+	ContextWindow:        1000000,
+	MaxOutputTokens:      64000,
+	InputPrice:           3.0,
+	OutputPrice:          15.0,
+	CachedInputPrice:     0.3,
+	CacheCreationPrice:   3.75,
+	CacheCreation1hPrice: 6.0,
 }
 
 // LookupModel 查找模型元数据，未知模型返回兜底模型
@@ -132,13 +138,15 @@ func LookupModel(modelID string) *sdk.ModelInfo {
 
 func specToModelInfo(id string, spec Spec) *sdk.ModelInfo {
 	return &sdk.ModelInfo{
-		ID:               id,
-		Name:             spec.Name,
-		ContextWindow:    spec.ContextWindow,
-		MaxOutputTokens:  spec.MaxOutputTokens,
-		InputPrice:       spec.InputPrice,
-		OutputPrice:      spec.OutputPrice,
-		CachedInputPrice: spec.CachedPrice,
+		ID:                   id,
+		Name:                 spec.Name,
+		ContextWindow:        spec.ContextWindow,
+		MaxOutputTokens:      spec.MaxOutputTokens,
+		InputPrice:           spec.InputPrice,
+		OutputPrice:          spec.OutputPrice,
+		CachedInputPrice:     spec.CachedPrice,
+		CacheCreationPrice:   spec.CacheCreationPrice,
+		CacheCreation1hPrice: spec.CacheCreation1hPrice,
 	}
 }
 
@@ -154,18 +162,24 @@ func fillCost(result *sdk.ForwardResult) {
 	}
 
 	cost := sdk.CalculateCost(sdk.CostInput{
-		InputTokens:       result.InputTokens,
-		OutputTokens:      result.OutputTokens,
-		CachedInputTokens: result.CachedInputTokens,
-		ServiceTier:       result.ServiceTier,
+		InputTokens:           result.InputTokens,
+		OutputTokens:          result.OutputTokens,
+		CachedInputTokens:     result.CachedInputTokens,
+		CacheCreationTokens:   result.CacheCreationTokens,
+		CacheCreation5mTokens: result.CacheCreation5mTokens,
+		CacheCreation1hTokens: result.CacheCreation1hTokens,
+		ServiceTier:           result.ServiceTier,
 	}, *model)
 
 	result.InputCost = cost.InputCost
 	result.OutputCost = cost.OutputCost
 	result.CachedInputCost = cost.CachedInputCost
+	result.CacheCreationCost = cost.CacheCreationCost
 	result.InputPrice = model.InputPrice
 	result.OutputPrice = model.OutputPrice
 	result.CachedInputPrice = model.CachedInputPrice
+	result.CacheCreationPrice = model.CacheCreationPrice
+	result.CacheCreation1hPrice = model.CacheCreation1hPrice
 }
 
 // claudeModelListEntry Anthropic /v1/models 接口返回的单个模型

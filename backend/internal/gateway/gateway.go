@@ -388,7 +388,7 @@ func (g *AnthropicGateway) HandleRequest(ctx context.Context, _, path, _ string,
 		}), nil
 
 	case "console/batch-cookie-auth":
-		// 批量 Cookie Auth
+		// 批量 Cookie Auth：通过多个 session_key 换取 OAuth Token 并返回完整凭证
 		var raw struct {
 			SessionKeys []string `json:"session_keys"`
 			ProxyURL    string   `json:"proxy_url"`
@@ -399,27 +399,36 @@ func (g *AnthropicGateway) HandleRequest(ctx context.Context, _, path, _ string,
 		}
 
 		type batchResult struct {
-			Email       string `json:"email,omitempty"`
-			AccountUUID string `json:"account_uuid,omitempty"`
-			AccountType string `json:"account_type,omitempty"`
-			Status      string `json:"status"`
-			Error       string `json:"error,omitempty"`
+			AccountType string            `json:"account_type,omitempty"`
+			AccountName string            `json:"account_name,omitempty"`
+			Credentials map[string]string `json:"credentials,omitempty"`
+			Status      string            `json:"status"`
+			Error       string            `json:"error,omitempty"`
 		}
 
 		results := make([]batchResult, 0, len(raw.SessionKeys))
 		for _, sk := range raw.SessionKeys {
-			acctType := "oauth"
 			tokenResp, err := g.ExchangeSessionKeyForToken(ctx, sk, raw.ProxyURL)
-
 			if err != nil {
 				results = append(results, batchResult{Status: "failed", Error: err.Error()})
 				continue
 			}
 
-			r := batchResult{Status: "ok", AccountType: acctType}
+			expiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339)
+			credentials := map[string]string{
+				"access_token":  tokenResp.AccessToken,
+				"refresh_token": tokenResp.RefreshToken,
+				"expires_at":    expiresAt,
+			}
+
+			r := batchResult{Status: "ok", AccountType: "oauth", Credentials: credentials}
 			if tokenResp.Account != nil {
-				r.Email = tokenResp.Account.EmailAddress
-				r.AccountUUID = tokenResp.Account.UUID
+				r.AccountName = tokenResp.Account.EmailAddress
+				credentials["email"] = tokenResp.Account.EmailAddress
+				credentials["account_uuid"] = tokenResp.Account.UUID
+			}
+			if tokenResp.Organization != nil {
+				credentials["org_uuid"] = tokenResp.Organization.UUID
 			}
 			results = append(results, r)
 		}
@@ -427,7 +436,7 @@ func (g *AnthropicGateway) HandleRequest(ctx context.Context, _, path, _ string,
 		return http.StatusOK, nil, jsonMarshal(map[string]any{"results": results}), nil
 
 	default:
-		return http.StatusNotFound, nil, jsonError("未知的操作: "+path), nil
+		return http.StatusNotFound, nil, jsonError("未知的操作: " + path), nil
 	}
 }
 
@@ -520,7 +529,6 @@ func buildCountTokensHeaders(req *http.Request, account *sdk.Account) {
 	setRawHeader(req.Header, "anthropic-version", DefaultAnthropicVersion)
 	setRawHeader(req.Header, "content-type", "application/json")
 }
-
 
 // forwardCountTokens 转发 count_tokens 请求
 func (g *AnthropicGateway) forwardCountTokens(ctx context.Context, req *sdk.ForwardRequest) (*sdk.ForwardResult, error) {

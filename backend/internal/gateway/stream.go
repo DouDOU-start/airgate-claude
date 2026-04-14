@@ -85,7 +85,11 @@ func handleNonStreamResponse(resp *http.Response, w http.ResponseWriter, start t
 	// 提取 usage 信息
 	inputTokens := int(gjson.GetBytes(body, "usage.input_tokens").Int())
 	outputTokens := int(gjson.GetBytes(body, "usage.output_tokens").Int())
-	cacheTokens := int(gjson.GetBytes(body, "usage.cache_read_input_tokens").Int())
+	cacheReadTokens := int(gjson.GetBytes(body, "usage.cache_read_input_tokens").Int())
+	cacheCreationTokens := int(gjson.GetBytes(body, "usage.cache_creation_input_tokens").Int())
+	// 5m / 1h 分档 token 数（Anthropic 新增字段，没有 breakdown 时 fallback 到总数按 5m 计价）
+	cc5m := int(gjson.GetBytes(body, "usage.cache_creation.ephemeral_5m_input_tokens").Int())
+	cc1h := int(gjson.GetBytes(body, "usage.cache_creation.ephemeral_1h_input_tokens").Int())
 	model := gjson.GetBytes(body, "model").String()
 
 	if w != nil {
@@ -98,7 +102,10 @@ func handleNonStreamResponse(resp *http.Response, w http.ResponseWriter, start t
 		StatusCode:            resp.StatusCode,
 		InputTokens:           inputTokens,
 		OutputTokens:          outputTokens,
-		CachedInputTokens:     cacheTokens,
+		CachedInputTokens:     cacheReadTokens,
+		CacheCreationTokens:   cacheCreationTokens,
+		CacheCreation5mTokens: cc5m,
+		CacheCreation1hTokens: cc1h,
 		ReasoningOutputTokens: int(gjson.GetBytes(body, "usage.reasoning_output_tokens").Int()),
 		Model:                 model,
 		Duration:              time.Since(start),
@@ -121,9 +128,12 @@ func extractSSEData(line string) (string, bool) {
 func extractAnthropicUsage(data string, eventType string, result *sdk.ForwardResult) {
 	switch eventType {
 	case "message_start":
-		// message_start 包含初始 usage（input_tokens）
+		// message_start 包含初始 usage（input_tokens + cache tokens + 5m/1h 分档）
 		result.InputTokens = int(gjson.Get(data, "message.usage.input_tokens").Int())
 		result.CachedInputTokens = int(gjson.Get(data, "message.usage.cache_read_input_tokens").Int())
+		result.CacheCreationTokens = int(gjson.Get(data, "message.usage.cache_creation_input_tokens").Int())
+		result.CacheCreation5mTokens = int(gjson.Get(data, "message.usage.cache_creation.ephemeral_5m_input_tokens").Int())
+		result.CacheCreation1hTokens = int(gjson.Get(data, "message.usage.cache_creation.ephemeral_1h_input_tokens").Int())
 		result.Model = gjson.Get(data, "message.model").String()
 
 	case "message_delta":
