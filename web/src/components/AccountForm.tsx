@@ -1,5 +1,21 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { cssVar } from '@airgate/theme';
+
+/** 批量 Session Key 换取结果（单条） */
+export interface BatchExchangeResult {
+  accountType: string;
+  accountName: string;
+  credentials: Record<string, string>;
+  status: 'ok' | 'failed';
+  error?: string;
+}
+
+/** 批量导入账号项 */
+export interface BatchAccountInput {
+  name: string;
+  type: string;
+  credentials: Record<string, string>;
+}
 
 /** 账号表单 Props（由核心 AccountsPage 注入） */
 export interface AccountFormProps {
@@ -9,6 +25,10 @@ export interface AccountFormProps {
   accountType?: string;
   onAccountTypeChange?: (type: string) => void;
   onSuggestedName?: (name: string) => void;
+  /** 进入/退出批量模式时通知外层，用于隐藏"下一步/创建"按钮 */
+  onBatchModeChange?: (isBatch: boolean) => void;
+  /** 批量导入账号，由核心侧调用 accountsApi.import 完成落库 */
+  onBatchImport?: (accounts: BatchAccountInput[]) => Promise<{ imported: number; failed: number }>;
   oauth?: {
     start: () => Promise<{ authorizeURL: string; state: string }>;
     exchange: (callbackURL: string) => Promise<{
@@ -16,6 +36,7 @@ export interface AccountFormProps {
       accountName: string;
       credentials: Record<string, string>;
     }>;
+    batchExchange?: (sessionKeys: string[]) => Promise<BatchExchangeResult[]>;
   };
 }
 
@@ -143,6 +164,8 @@ export function AccountForm({
   accountType: propType,
   onAccountTypeChange,
   onSuggestedName,
+  onBatchModeChange,
+  onBatchImport,
   oauth,
 }: AccountFormProps) {
   const [category, setCategory] = useState<UICategory>(
@@ -152,11 +175,73 @@ export function AccountForm({
     detectAcquireMethod(propType, credentials),
   );
 
+  // 单个 / 批量 模式
+  const [sessionKeyMode, setSessionKeyMode] = useState<'single' | 'batch'>('single');
+  const [batchText, setBatchText] = useState('');
+  const [batchPhase, setBatchPhase] = useState<'input' | 'exchanging' | 'result'>('input');
+  const [batchResults, setBatchResults] = useState<BatchExchangeResult[]>([]);
+  const [batchImportedCount, setBatchImportedCount] = useState(0);
+
   // OAuth 浏览器授权流程状态
   const [authorizeURL, setAuthorizeURL] = useState('');
   const [callbackURL, setCallbackURL] = useState('');
   const [oauthLoading, setOauthLoading] = useState(false);
   const [oauthStatus, setOauthStatus] = useState<{ type: 'info' | 'success' | 'error'; text: string } | null>(null);
+
+  // 是否处于批量模式（需要隐藏外层"下一步/创建"按钮）
+  const isBatchActive =
+    category === 'claude_code' && acquireMethod === 'session_key' && sessionKeyMode === 'batch';
+
+  useEffect(() => {
+    onBatchModeChange?.(isBatchActive);
+  }, [isBatchActive, onBatchModeChange]);
+
+  function parseSessionKeys(text: string): string[] {
+    return text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith('#'));
+  }
+
+  const resetBatchState = useCallback(() => {
+    setBatchText('');
+    setBatchPhase('input');
+    setBatchResults([]);
+    setBatchImportedCount(0);
+  }, []);
+
+  const handleBatchImport = useCallback(async () => {
+    if (!oauth?.batchExchange || !onBatchImport) {
+      setOauthStatus({ type: 'error', text: '当前环境不支持批量导入' });
+      return;
+    }
+    const keys = parseSessionKeys(batchText);
+    if (keys.length === 0) {
+      setOauthStatus({ type: 'error', text: '请至少输入一个 Session Key' });
+      return;
+    }
+    setBatchPhase('exchanging');
+    setOauthStatus({ type: 'info', text: `正在批量换取 ${keys.length} 个 Token...` });
+    try {
+      const results = await oauth.batchExchange(keys);
+      setBatchResults(results);
+      const successItems = results.filter((r) => r.status === 'ok' && r.credentials);
+      if (successItems.length > 0) {
+        const accounts: BatchAccountInput[] = successItems.map((r) => ({
+          name: r.accountName || 'Claude Code',
+          type: r.accountType || 'oauth',
+          credentials: r.credentials,
+        }));
+        const importResp = await onBatchImport(accounts);
+        setBatchImportedCount(importResp.imported);
+      }
+      setBatchPhase('result');
+      setOauthStatus(null);
+    } catch (err) {
+      setBatchPhase('input');
+      setOauthStatus({ type: 'error', text: err instanceof Error ? err.message : '批量导入失败' });
+    }
+  }, [batchText, oauth, onBatchImport]);
 
   const updateField = useCallback(
     (key: string, value: string) => {
@@ -181,6 +266,8 @@ export function AccountForm({
       setAuthorizeURL('');
       setCallbackURL('');
       setOauthStatus(null);
+      resetBatchState();
+      setSessionKeyMode('single');
       if (cat === 'claude_console') {
         onAccountTypeChange?.('apikey');
         onChange({ api_key: '', base_url: '' });
@@ -190,7 +277,7 @@ export function AccountForm({
         onChange({ session_key: '', access_token: '', refresh_token: '', expires_at: '', base_url: '' });
       }
     },
-    [onChange, onAccountTypeChange, resolveAccountType, acquireMethod],
+    [onChange, onAccountTypeChange, resolveAccountType, acquireMethod, resetBatchState],
   );
 
   // 切换获取方式
@@ -200,10 +287,22 @@ export function AccountForm({
       setAuthorizeURL('');
       setCallbackURL('');
       setOauthStatus(null);
+      resetBatchState();
+      setSessionKeyMode('single');
       const type = resolveAccountType('claude_code', method);
       onAccountTypeChange?.(type);
     },
-    [onAccountTypeChange, resolveAccountType],
+    [onAccountTypeChange, resolveAccountType, resetBatchState],
+  );
+
+  // 切换 Session Key 单个/批量
+  const handleSessionKeyModeChange = useCallback(
+    (m: 'single' | 'batch') => {
+      setSessionKeyMode(m);
+      resetBatchState();
+      setOauthStatus(null);
+    },
+    [resetBatchState],
   );
 
   // ── OAuth 浏览器流程 ──
@@ -373,34 +472,180 @@ export function AccountForm({
           {/* ── Session Key 获取方式 ── */}
           {acquireMethod === 'session_key' && (
             <div style={sectionStyle}>
-              <div>
-                <label style={labelStyle}>
-                  Session Key <span style={{ color: cssVar('danger') }}>*</span>
-                </label>
-                <input
-                  type="password"
-                  style={inputStyle}
-                  placeholder="sk-ant-sid01-..."
-                  value={credentials.session_key ?? ''}
-                  onChange={(e) => updateField('session_key', e.target.value)}
-                />
-                <div style={{ ...descStyle, marginTop: '0.375rem' }}>
-                  在 claude.ai 的浏览器 Cookie 中获取 sessionKey 值
-                </div>
+              {/* 单个 / 批量 模式切换 */}
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                <span
+                  style={sessionKeyMode === 'single' ? pillActiveStyle : pillStyle}
+                  onClick={() => handleSessionKeyModeChange('single')}
+                >
+                  单个
+                </span>
+                <span
+                  style={sessionKeyMode === 'batch' ? pillActiveStyle : pillStyle}
+                  onClick={() => handleSessionKeyModeChange('batch')}
+                >
+                  批量
+                </span>
               </div>
 
-              {oauth && (
-                <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <button
-                    type="button"
-                    onClick={exchangeSessionKey}
-                    disabled={!credentials.session_key?.trim() || oauthLoading}
-                    style={primaryBtn(!credentials.session_key?.trim() || oauthLoading)}
-                  >
-                    {oauthLoading ? '获取中...' : '获取 OAuth Token'}
-                  </button>
-                  <StatusMessage status={oauthStatus} />
-                </div>
+              {/* ── 单个模式 ── */}
+              {sessionKeyMode === 'single' && (
+                <>
+                  <div>
+                    <label style={labelStyle}>
+                      Session Key <span style={{ color: cssVar('danger') }}>*</span>
+                    </label>
+                    <input
+                      type="password"
+                      style={inputStyle}
+                      placeholder="sk-ant-sid01-..."
+                      value={credentials.session_key ?? ''}
+                      onChange={(e) => updateField('session_key', e.target.value)}
+                    />
+                    <div style={{ ...descStyle, marginTop: '0.375rem' }}>
+                      在 claude.ai 的浏览器 Cookie 中获取 sessionKey 值
+                    </div>
+                  </div>
+
+                  {oauth && (
+                    <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={exchangeSessionKey}
+                        disabled={!credentials.session_key?.trim() || oauthLoading}
+                        style={primaryBtn(!credentials.session_key?.trim() || oauthLoading)}
+                      >
+                        {oauthLoading ? '获取中...' : '获取 OAuth Token'}
+                      </button>
+                      <StatusMessage status={oauthStatus} />
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* ── 批量模式 ── */}
+              {sessionKeyMode === 'batch' && (
+                <>
+                  {batchPhase === 'input' && (
+                    <>
+                      <label style={labelStyle}>
+                        Session Keys（每行一个，# 开头为注释）
+                      </label>
+                      <textarea
+                        style={{
+                          ...inputStyle,
+                          minHeight: '140px',
+                          resize: 'vertical',
+                          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        }}
+                        placeholder={'sk-ant-sid01-...\nsk-ant-sid01-...'}
+                        value={batchText}
+                        onChange={(e) => setBatchText(e.target.value)}
+                      />
+                      <div style={{ ...descStyle, marginTop: '0.375rem' }}>
+                        已识别 {parseSessionKeys(batchText).length} 个 Session Key · 成功换取后将自动创建账号
+                      </div>
+                      <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={handleBatchImport}
+                          disabled={parseSessionKeys(batchText).length === 0 || !oauth?.batchExchange || !onBatchImport}
+                          style={primaryBtn(parseSessionKeys(batchText).length === 0 || !oauth?.batchExchange || !onBatchImport)}
+                        >
+                          批量导入
+                        </button>
+                        <StatusMessage status={oauthStatus} />
+                      </div>
+                    </>
+                  )}
+
+                  {batchPhase === 'exchanging' && (
+                    <div style={{ padding: '1.5rem 0', textAlign: 'center' }}>
+                      <div style={{ fontSize: '0.875rem', color: cssVar('textSecondary') }}>
+                        正在批量换取 Token 并创建账号...
+                      </div>
+                    </div>
+                  )}
+
+                  {batchPhase === 'result' && (
+                    <div>
+                      <div style={{ display: 'flex', gap: '1rem', fontSize: '0.875rem', marginBottom: '0.5rem' }}>
+                        <span style={{ color: cssVar('success') }}>
+                          成功 {batchResults.filter((r) => r.status === 'ok').length}
+                        </span>
+                        {batchResults.filter((r) => r.status === 'failed').length > 0 && (
+                          <span style={{ color: cssVar('danger') }}>
+                            失败 {batchResults.filter((r) => r.status === 'failed').length}
+                          </span>
+                        )}
+                        {batchImportedCount > 0 && (
+                          <span style={{ color: cssVar('textSecondary') }}>
+                            已导入 {batchImportedCount} 个账号
+                          </span>
+                        )}
+                      </div>
+                      <div
+                        style={{
+                          maxHeight: '200px',
+                          overflowY: 'auto',
+                          border: `1px solid ${cssVar('glassBorder')}`,
+                          borderRadius: cssVar('radiusMd'),
+                        }}
+                      >
+                        {batchResults.map((r, i) => (
+                          <div
+                            key={i}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.5rem',
+                              padding: '0.5rem 0.75rem',
+                              fontSize: '0.75rem',
+                              borderBottom:
+                                i < batchResults.length - 1
+                                  ? `1px solid ${cssVar('glassBorder')}`
+                                  : undefined,
+                            }}
+                          >
+                            <span
+                              style={{
+                                color: r.status === 'ok' ? cssVar('success') : cssVar('danger'),
+                              }}
+                            >
+                              {r.status === 'ok' ? '✓' : '✗'}
+                            </span>
+                            <span style={{ color: cssVar('text'), flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {r.accountName || `SK #${i + 1}`}
+                            </span>
+                            {r.error && (
+                              <span
+                                style={{
+                                  color: cssVar('danger'),
+                                  maxWidth: '220px',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                                title={r.error}
+                              >
+                                {r.error}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ marginTop: '0.75rem' }}>
+                        <button
+                          type="button"
+                          onClick={resetBatchState}
+                          style={outlineBtn(false)}
+                        >
+                          继续批量导入
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -457,8 +702,8 @@ export function AccountForm({
             </div>
           )}
 
-          {/* ── Token 字段 ── */}
-          {credentials.access_token ? (
+          {/* ── Token 字段（批量模式下隐藏） ── */}
+          {!isBatchActive && (credentials.access_token ? (
             <>
               <div>
                 <label style={labelStyle}>Access Token</label>
@@ -477,20 +722,22 @@ export function AccountForm({
             <div style={{ ...descStyle, color: cssVar('textSecondary'), padding: '0.5rem 0' }}>
               通过上方 Session Key 或浏览器授权获取 Token
             </div>
-          )}
+          ))}
 
-          {/* ── Base URL ── */}
-          <div>
-            <label style={labelStyle}>Base URL</label>
-            <input
-              type="text"
-              style={inputStyle}
-              placeholder="https://api.anthropic.com"
-              value={credentials.base_url ?? ''}
-              onChange={(e) => updateField('base_url', e.target.value)}
-            />
-            <div style={{ ...descStyle, marginTop: '0.375rem' }}>留空使用官方 Anthropic API</div>
-          </div>
+          {/* ── Base URL（批量模式下隐藏） ── */}
+          {!isBatchActive && (
+            <div>
+              <label style={labelStyle}>Base URL</label>
+              <input
+                type="text"
+                style={inputStyle}
+                placeholder="https://api.anthropic.com"
+                value={credentials.base_url ?? ''}
+                onChange={(e) => updateField('base_url', e.target.value)}
+              />
+              <div style={{ ...descStyle, marginTop: '0.375rem' }}>留空使用官方 Anthropic API</div>
+            </div>
+          )}
         </>
       )}
     </div>
