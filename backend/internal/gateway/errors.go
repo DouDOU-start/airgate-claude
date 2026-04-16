@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	sdk "github.com/DouDOU-start/airgate-sdk"
@@ -23,6 +24,21 @@ func accountStatusFromCode(statusCode int) sdk.AccountStatus {
 	default:
 		return sdk.AccountStatusOK
 	}
+}
+
+// accountStatusFromBody 从响应体推断账号状态。
+// Anthropic 某些账号级错误（如组织被封禁）走 400，accountStatusFromCode 无法识别，
+// 需额外检查 error.message 内容。
+func accountStatusFromBody(statusCode int, body []byte) sdk.AccountStatus {
+	base := accountStatusFromCode(statusCode)
+	if base != sdk.AccountStatusOK || statusCode != 400 {
+		return base
+	}
+	msg := strings.ToLower(gjson.GetBytes(body, "error.message").String())
+	if strings.Contains(msg, "disabled") || strings.Contains(msg, "deactivated") || strings.Contains(msg, "suspended") {
+		return sdk.AccountStatusDisabled
+	}
+	return base
 }
 
 // extractErrorMessage 从 Anthropic JSON 错误响应中提取 error.type + error.message

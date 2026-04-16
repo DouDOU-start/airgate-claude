@@ -363,13 +363,21 @@ func normalizeRequestBody(body []byte) []byte {
 	return bytes.Replace(body, []byte(`"model":"`+modelID+`"`), []byte(`"model":"`+normalized+`"`), 1)
 }
 
-// handleErrorResponse 处理上游错误响应，同时将错误响应写入客户端 Writer
-// 4xx 返回 (result, nil) 让 Core 透传；5xx 返回 (result, error) 让 Core 报告失败
+// handleErrorResponse 处理上游错误响应。
+//
+// 分三类处理：
+//   - 账号级错误（disabled/expired/rate_limited，含 400 "organization disabled"）：
+//     不写 w，保持 c.Writer unwritten 让 Core 能 failover；返回 error 触发重试和惩罚。
+//   - 普通 4xx（请求参数有误等客户端侧错误）：透传给客户端，返回 nil 让 Core 识别为 client error。
+//   - 5xx：透传给客户端，返回 error 让 Core 报告失败。
 func handleErrorResponse(resp *http.Response, w http.ResponseWriter, start time.Time) (*sdk.ForwardResult, error) {
 	respBody, _ := io.ReadAll(resp.Body)
 
-	// 将上游错误响应透传给客户端
-	if w != nil {
+	accountStatus := accountStatusFromBody(resp.StatusCode, respBody)
+	isAccountError := accountStatus != sdk.AccountStatusOK
+
+	// 账号级错误不写 w：让 c.Writer 保持 unwritten，Core 的 canFailover 才不会被短路
+	if !isAccountError && w != nil {
 		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(respBody)
@@ -378,19 +386,19 @@ func handleErrorResponse(resp *http.Response, w http.ResponseWriter, start time.
 	result := &sdk.ForwardResult{
 		StatusCode:    resp.StatusCode,
 		Duration:      time.Since(start),
-		AccountStatus: accountStatusFromCode(resp.StatusCode),
+		AccountStatus: accountStatus,
 		RetryAfter:    extractRetryAfterHeader(resp.Header),
 		Body:          respBody,
 		Headers:       resp.Header,
 	}
 
-	// 4xx：上游明确拒绝，Core 应透传给客户端而非返回通用 502
-	if resp.StatusCode < 500 {
-		return result, nil
+	// 账号级错误或 5xx：返回 error 触发 Core failover + ReportAccountError
+	if isAccountError || resp.StatusCode >= 500 {
+		return result, fmt.Errorf("上游返回 %d: %s", resp.StatusCode, truncate(string(respBody), 200))
 	}
 
-	// 5xx：上游服务异常
-	return result, fmt.Errorf("上游返回 %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+	// 普通 4xx（客户端请求有误）：返回 nil，Core 识别为 client error 不做 failover
+	return result, nil
 }
 
 // getHTTPClient 从连接池获取 HTTP 客户端
