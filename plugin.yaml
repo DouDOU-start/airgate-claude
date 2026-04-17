@@ -50,6 +50,12 @@ gateway:
       input_price: 5
       output_price: 25
       cache_price: 0.5
+    - id: claude-opus-4-7
+      name: Claude Opus 4.7
+      max_tokens: 1000000
+      input_price: 5
+      output_price: 25
+      cache_price: 0.5
     - id: claude-sonnet-4-20250514
       name: Claude Sonnet 4
       max_tokens: 200000

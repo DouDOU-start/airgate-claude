@@ -28,6 +28,7 @@ type Spec struct {
 // CacheCreation1hPrice = Cache Write 1h TTL（2.00x base input）
 var modelRegistry = map[string]Spec{
 	// Opus — input $5 / cache_read $0.50 / write_5m $6.25 / write_1h $10 / output $25
+	"claude-opus-4-7":          {"Claude Opus 4.7", 1000000, 128000, 5.0, 0.5, 6.25, 10.0, 25.0},
 	"claude-opus-4-6":          {"Claude Opus 4.6", 1000000, 128000, 5.0, 0.5, 6.25, 10.0, 25.0},
 	"claude-opus-4-5-20251101": {"Claude Opus 4.5", 200000, 64000, 5.0, 0.5, 6.25, 10.0, 25.0},
 	"claude-opus-4-1-20250805": {"Claude Opus 4.1", 200000, 32000, 15.0, 1.5, 18.75, 30.0, 75.0},
@@ -119,8 +120,8 @@ func LookupModel(modelID string) *sdk.ModelInfo {
 	lower := strings.ToLower(modelID)
 	switch {
 	case strings.Contains(lower, "opus"):
-		if spec, ok := modelRegistry["claude-opus-4-6"]; ok {
-			return specToModelInfo("claude-opus-4-6", spec)
+		if spec, ok := modelRegistry["claude-opus-4-7"]; ok {
+			return specToModelInfo("claude-opus-4-7", spec)
 		}
 	case strings.Contains(lower, "haiku"):
 		if spec, ok := modelRegistry["claude-haiku-4-5-20251001"]; ok {
@@ -193,6 +194,7 @@ type claudeModelListEntry struct {
 // defaultModelList 默认模型列表（Anthropic API 格式）
 var defaultModelList = []claudeModelListEntry{
 	// Latest
+	{ID: "claude-opus-4-7", Type: "model", DisplayName: "Claude Opus 4.7", CreatedAt: "2026-04-15T00:00:00Z"},
 	{ID: "claude-opus-4-6", Type: "model", DisplayName: "Claude Opus 4.6", CreatedAt: "2026-02-06T00:00:00Z"},
 	{ID: "claude-sonnet-4-6", Type: "model", DisplayName: "Claude Sonnet 4.6", CreatedAt: "2026-02-18T00:00:00Z"},
 	{ID: "claude-haiku-4-5-20251001", Type: "model", DisplayName: "Claude Haiku 4.5", CreatedAt: "2025-10-01T00:00:00Z"},
