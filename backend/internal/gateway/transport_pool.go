@@ -81,10 +81,11 @@ func (p *StandardTransportPool) Close() {
 }
 
 // FingerprintTransportPool OAuth/session_key 的 uTLS 指纹连接池
-// 按 proxyURL 分组缓存 Transport（uTLS 指纹相同，仅代理不同）
+// 按 (accountID, proxyURL) 分桶：不同账号持有独立 Transport，
+// 互不共享连接 / session ticket / PSK，使得多账号在上游看来是独立 CLI 实例。
 type FingerprintTransportPool struct {
 	mu   sync.RWMutex
-	pool map[string]*http.Transport // key = proxyURL
+	pool map[string]*http.Transport // key = "accountID|proxyURL"
 }
 
 // NewFingerprintTransportPool 创建 TLS 指纹 Transport 连接池
@@ -94,10 +95,17 @@ func NewFingerprintTransportPool() *FingerprintTransportPool {
 	}
 }
 
-// Get 获取或创建指纹化 Transport
-func (p *FingerprintTransportPool) Get(proxyURL string) *http.Transport {
+// fpKey 生成池 key：tls_profile 变化时自动换 bucket
+func fpKey(accountID int64, proxyURL, profile string) string {
+	return fmt.Sprintf("%d|%s|%s", accountID, proxyURL, profile)
+}
+
+// Get 获取或创建指纹化 Transport（按账号 + profile 隔离）
+func (p *FingerprintTransportPool) Get(accountID int64, proxyURL, profile string) *http.Transport {
+	key := fpKey(accountID, proxyURL, profile)
+
 	p.mu.RLock()
-	if t, ok := p.pool[proxyURL]; ok {
+	if t, ok := p.pool[key]; ok {
 		p.mu.RUnlock()
 		return t
 	}
@@ -106,13 +114,12 @@ func (p *FingerprintTransportPool) Get(proxyURL string) *http.Transport {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Double-check
-	if t, ok := p.pool[proxyURL]; ok {
+	if t, ok := p.pool[key]; ok {
 		return t
 	}
 
-	t := buildFingerprintTransport(proxyURL)
-	p.pool[proxyURL] = t
+	t := buildFingerprintTransportWithProfile(proxyURL, profile)
+	p.pool[key] = t
 	return t
 }
 
@@ -127,14 +134,14 @@ func (p *FingerprintTransportPool) Close() {
 }
 
 // getHTTPClient 根据账号类型从连接池获取 HTTP Client
-func getHTTPClient(stdPool *StandardTransportPool, fpPool *FingerprintTransportPool, accountType, proxyURL string) *http.Client {
+func getHTTPClient(stdPool *StandardTransportPool, fpPool *FingerprintTransportPool, accountID int64, accountType, proxyURL, tlsProfile string) *http.Client {
 	var transport http.RoundTripper
 	switch accountType {
 	case "oauth", "session_key":
 		if fpPool != nil {
-			transport = fpPool.Get(proxyURL)
+			transport = fpPool.Get(accountID, proxyURL, tlsProfile)
 		} else {
-			transport = buildFingerprintTransport(proxyURL)
+			transport = buildFingerprintTransportWithProfile(proxyURL, tlsProfile)
 		}
 	default:
 		if stdPool != nil {

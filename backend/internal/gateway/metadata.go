@@ -49,6 +49,7 @@ func BuildPluginInfo() sdk.PluginInfo {
 					{Key: "refresh_token", Label: "Refresh Token", Type: "password", Required: false, Placeholder: "自动获取"},
 					{Key: "expires_at", Label: "过期时间", Type: "text", Required: false, Placeholder: "自动填充"},
 					{Key: "base_url", Label: "API 地址", Type: "text", Required: false, Placeholder: "https://api.anthropic.com"},
+					{Key: "tls_profile", Label: "TLS 指纹 Profile", Type: "select", Required: false, Placeholder: "auto"},
 				},
 			},
 		},

@@ -18,7 +18,7 @@ import (
 
 const (
 	defaultBaseURL       = "https://api.anthropic.com"
-	httpTimeout          = 5 * time.Minute
+	httpTimeout          = 3 * time.Minute // 对齐 CC 2.1.112 X-Stainless-Timeout=300
 	httpDialTimeout      = 30 * time.Second
 	httpTLSTimeout       = 15 * time.Second
 	httpIdleTimeout      = 90 * time.Second
@@ -119,10 +119,36 @@ func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReq
 	start := time.Now()
 	account := req.Account
 
+	// Claude Code 客户端身份闸：优先读 Core 下发的分组级头
+	//   X-Airgate-Plugin-Claude-Claude-Code-Only: true
+	// 兼容旧的账号级凭证 claude_code_only=true（后续版本可删）。
+	ccOnly := strings.EqualFold(req.Headers.Get("X-Airgate-Plugin-Claude-Claude-Code-Only"), "true") ||
+		strings.EqualFold(account.Credentials["claude_code_only"], "true")
+	if ccOnly {
+		if result := validateClaudeCodeRequest(path, req.Body, req.Headers); !result.OK {
+			g.logger.Info("拒绝非 Claude Code 客户端请求",
+				"account_id", account.ID,
+				"path", path,
+				"reason", result.Reason,
+			)
+			return rejectNonCCRequest(req.Writer, result.Reason, start), nil
+		}
+	}
+
+	// 登记到 sidecar 账号注册表，供 usagePoller 使用
+	if g.registry != nil {
+		g.registry.register(account)
+	}
+
 	// 通过 tokenManager 检查并自动刷新过期 token（加锁 + double-check + 重试）
 	updatedCreds, err := g.tokenMgr.ensureValidToken(ctx, account)
 	if err != nil {
 		return nil, fmt.Errorf("token 刷新失败: %w", err)
+	}
+
+	// 若刚刚刷新过 token，异步发起一次 max_tokens=1 探测（postRefreshProbe）
+	if len(updatedCreds) > 0 && g.sidecar != nil {
+		g.sidecar.fireRefreshProbe(account)
 	}
 
 	if account.Credentials["access_token"] == "" {
@@ -183,6 +209,12 @@ func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReq
 			result.UpdatedCredentials = updatedCreds
 		}
 	}
+
+	// 成功响应后异步补发 count_tokens，模拟真实 CLI 的 token 估算流量
+	if fwdErr == nil && result != nil && result.StatusCode < 400 && g.sidecar != nil {
+		g.sidecar.scheduleCountTokens(account.ID, body)
+	}
+
 	return result, fwdErr
 }
 
@@ -233,7 +265,7 @@ func resolveBaseURL(creds map[string]string) string {
 	return defaultBaseURL
 }
 
-// preprocessBody 预处理请求体：规范化模型 ID + 补充必填字段
+// preprocessBody 预处理请求体：规范化模型 ID + 补充必填字段 + 第三方红线净化
 func preprocessBody(body []byte) []byte {
 	if len(body) == 0 {
 		return body
@@ -244,6 +276,9 @@ func preprocessBody(body []byte) []byte {
 	if !gjson.GetBytes(body, "max_tokens").Exists() {
 		body, _ = sjson.SetBytes(body, "max_tokens", 4096)
 	}
+
+	// 剥离空 text / 非法位置 thinking 块，避免上游 400
+	body = sanitizeBody(body)
 
 	return body
 }
@@ -310,22 +345,28 @@ func preprocessOAuthBody(body []byte, account *sdk.Account) []byte {
 	}
 
 	// 2. 注入 metadata.user_id（如果缺失）
+	//    使用 sticky session：同会话 30 min 内复用同一 user_id，模拟真实 CLI 行为
 	if !gjson.GetBytes(body, "metadata.user_id").Exists() {
 		accountUUID := account.Credentials["account_uuid"]
 		if accountUUID == "" {
 			accountUUID = fmt.Sprintf("%d", account.ID)
 		}
+		fingerprint := conversationFingerprint(body)
+		sessionUUID := defaultSessionCache.stickyUserID(account.ID, fingerprint)
 		userID := fmt.Sprintf("user_%s_account_%s_session_%s",
-			generateSessionID(),
+			newUUIDv4(),
 			accountUUID,
-			generateSessionID(),
+			sessionUUID,
 		)
 		body, _ = sjson.SetBytes(body, "metadata", map[string]string{"user_id": userID})
 	}
 
 	// 3. 确保 tools 字段存在（Claude Code 总是发送 tools，即使为空）
+	//    若 tools 非空，在最后一项补 cache_control: ephemeral（提升 prompt cache 命中率）
 	if !gjson.GetBytes(body, "tools").Exists() {
 		body, _ = sjson.SetRawBytes(body, "tools", []byte("[]"))
+	} else {
+		body = appendToolsEphemeralCache(body)
 	}
 
 	// 4. 删除 temperature（OAuth 模式下 Claude Code 不发送）
@@ -342,6 +383,30 @@ func preprocessOAuthBody(body []byte, account *sdk.Account) []byte {
 	}
 
 	return body
+}
+
+// appendToolsEphemeralCache 在最后一个 tool 上加 cache_control: ephemeral
+// CC 2.1.10x+ 行为：仅末尾工具贴 ephemeral 标记，显著提升 prompt cache 命中率。
+// 若已存在 cache_control 则跳过，避免覆盖客户端更细粒度的缓存策略。
+func appendToolsEphemeralCache(body []byte) []byte {
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.IsArray() {
+		return body
+	}
+	arr := tools.Array()
+	if len(arr) == 0 {
+		return body
+	}
+	lastIdx := len(arr) - 1
+	if gjson.GetBytes(body, fmt.Sprintf("tools.%d.cache_control", lastIdx)).Exists() {
+		return body
+	}
+	newBody, err := sjson.SetBytes(body, fmt.Sprintf("tools.%d.cache_control", lastIdx),
+		map[string]string{"type": "ephemeral"})
+	if err != nil {
+		return body
+	}
+	return newBody
 }
 
 // normalizeRequestBody 预处理请求体，规范化模型 ID
@@ -401,7 +466,29 @@ func handleErrorResponse(resp *http.Response, w http.ResponseWriter, start time.
 	return result, nil
 }
 
-// getHTTPClient 从连接池获取 HTTP 客户端
+// rejectNonCCRequest 构造 403 响应，供 claude_code_only 账号使用。
+// 不走 handleErrorResponse 因为这是网关主动拒绝，不是上游返回。
+//
+// 关键：AccountStatus 显式标 OK，ErrorMessage 是客户端侧错误语义。
+// Core 的 forwarder_result / host_service 识别 AccountStatus 决定是否
+// 关闭账号调度——我们不希望 CC 闸误判成账号故障。
+func rejectNonCCRequest(w http.ResponseWriter, reason string, start time.Time) *sdk.ForwardResult {
+	body := ccRejectBody(reason)
+	if w != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write(body)
+	}
+	return &sdk.ForwardResult{
+		StatusCode:    http.StatusForbidden,
+		Duration:      time.Since(start),
+		Body:          body,
+		ErrorMessage:  "claude_code_only: " + reason,
+		AccountStatus: sdk.AccountStatusOK, // 客户端侧错误，不是账号故障
+	}
+}
+
+// getHTTPClient 从连接池获取 HTTP 客户端（按账号 ID + tls_profile 分桶）
 func (g *AnthropicGateway) getHTTPClient(account *sdk.Account) *http.Client {
-	return getHTTPClient(g.stdPool, g.fpPool, account.Type, account.ProxyURL)
+	return getHTTPClient(g.stdPool, g.fpPool, account.ID, account.Type, account.ProxyURL, account.Credentials["tls_profile"])
 }

@@ -23,6 +23,8 @@ type AnthropicGateway struct {
 	tokenMgr *tokenManager
 	stdPool  *StandardTransportPool
 	fpPool   *FingerprintTransportPool
+	registry *accountRegistry
+	sidecar  *sidecarRunner
 }
 
 func (g *AnthropicGateway) Info() sdk.PluginInfo {
@@ -42,6 +44,10 @@ func (g *AnthropicGateway) Init(ctx sdk.PluginContext) error {
 	g.stdPool = NewStandardTransportPool()
 	g.fpPool = NewFingerprintTransportPool()
 
+	// 账号注册表 + sidecar 运行器
+	g.registry = newAccountRegistry()
+	g.sidecar = newSidecarRunner(g)
+
 	// 初始化 token 刷新管理器
 	g.tokenMgr = newTokenManager(g, g.logger)
 
@@ -51,11 +57,17 @@ func (g *AnthropicGateway) Init(ctx sdk.PluginContext) error {
 
 func (g *AnthropicGateway) Start(_ context.Context) error {
 	g.logger.Info("Claude 网关插件启动", "pool_stats", poolStats(g.stdPool, g.fpPool))
+	if g.sidecar != nil {
+		g.sidecar.start()
+	}
 	return nil
 }
 
 func (g *AnthropicGateway) Stop(_ context.Context) error {
 	g.logger.Info("Claude 网关插件停止")
+	if g.sidecar != nil {
+		g.sidecar.stop()
+	}
 	if g.stdPool != nil {
 		g.stdPool.Close()
 	}

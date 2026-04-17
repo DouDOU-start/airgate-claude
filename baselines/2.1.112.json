@@ -1,0 +1,79 @@
+{
+  "cli_version": "2.1.112",
+  "runtime": "bun",
+  "runtime_version": "v1.3.13",
+  "tls_version_min": 771,
+  "tls_version_max": 772,
+  "cipher_suites": [
+    4865,
+    4866,
+    4867,
+    49195,
+    49199,
+    49196,
+    49200,
+    52393,
+    52392,
+    49161,
+    49171,
+    49162,
+    49172,
+    156,
+    157,
+    47,
+    53
+  ],
+  "curves": [
+    29,
+    23,
+    24
+  ],
+  "signature_algorithms": [
+    1027,
+    2052,
+    1025,
+    1283,
+    2053,
+    1281,
+    2054,
+    1537,
+    513
+  ],
+  "alpn_protocols": [
+    "http/1.1"
+  ],
+  "extensions": [
+    "*tls.SNIExtension",
+    "*tls.GREASEEncryptedClientHelloExtension",
+    "*tls.ExtendedMasterSecretExtension",
+    "*tls.RenegotiationInfoExtension",
+    "*tls.SupportedCurvesExtension",
+    "*tls.SupportedPointsExtension",
+    "*tls.SessionTicketExtension",
+    "*tls.ALPNExtension",
+    "*tls.StatusRequestExtension",
+    "*tls.SignatureAlgorithmsExtension",
+    "*tls.SCTExtension",
+    "*tls.KeyShareExtension",
+    "*tls.PSKKeyExchangeModesExtension",
+    "*tls.SupportedVersionsExtension"
+  ],
+  "extension_ids": [
+    0,
+    65037,
+    23,
+    65281,
+    10,
+    11,
+    35,
+    16,
+    5,
+    13,
+    18,
+    51,
+    45,
+    43
+  ],
+  "ja3": "771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49161-49171-49162-49172-156-157-47-53,0-65037-23-65281-10-11-35-16-5-13-18-51-45-43,29-23-24,0",
+  "ja3_hash": "44f88fca027f27bab4bb08d4af15f23e"
+}

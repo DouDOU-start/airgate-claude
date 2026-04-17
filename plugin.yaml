@@ -112,3 +112,8 @@ gateway:
           type: text
           required: false
           placeholder: https://api.anthropic.com
+        - key: tls_profile
+          label: TLS 指纹 Profile
+          type: select
+          required: false
+          placeholder: auto

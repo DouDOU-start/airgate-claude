@@ -87,6 +87,17 @@ test: ## 运行测试
 vet: ## 静态分析
 	@cd backend && $(GO) vet ./...
 
+# ===================== 指纹校验 =====================
+
+BASELINE ?= baselines/2.1.112.json
+
+fp-capture: ## 抓取当前 ClientHelloSpec → baselines/2.1.112.json
+	@mkdir -p baselines
+	@cd backend && $(GO) run ./cmd/fp capture --out ../$(BASELINE)
+
+fp-verify: ## 验证当前 spec 未偏离 baseline（CI 用）
+	@cd backend && $(GO) run ./cmd/fp verify --baseline ../$(BASELINE)
+
 # ===================== Git Hooks =====================
 
 setup-hooks: ## 安装 Git pre-commit hook

@@ -738,6 +738,30 @@ export function AccountForm({
               <div style={{ ...descStyle, marginTop: '0.375rem' }}>留空使用官方 Anthropic API</div>
             </div>
           )}
+
+          {/* ── TLS 指纹 profile（批量模式下隐藏） ── */}
+          {!isBatchActive && (
+            <div>
+              <label style={labelStyle}>TLS 指纹 Profile</label>
+              <select
+                style={{ ...inputStyle, appearance: 'auto' }}
+                value={credentials.tls_profile ?? 'auto'}
+                onChange={(e) => updateField('tls_profile', e.target.value)}
+              >
+                <option value="auto">Auto（默认，跟随最新 baseline）</option>
+                <option value="bun-2.1.112">bun-2.1.112（固定当前版本）</option>
+              </select>
+              <div style={{ ...descStyle, marginTop: '0.375rem' }}>
+                Auto 自动使用网关内置的最新 Claude CLI 指纹；若上游风控与网关升级节奏不匹配，可手动固定某一 baseline。
+              </div>
+            </div>
+          )}
+
+          {/*
+            注：claude_code_only 已上移到分组级（Core: group.plugin_settings.claude.claude_code_only）。
+            此处不再提供账号级开关；插件仍保留 credentials.claude_code_only 的兼容读取，
+            但新建/编辑不暴露该字段。
+          */}
         </>
       )}
     </div>

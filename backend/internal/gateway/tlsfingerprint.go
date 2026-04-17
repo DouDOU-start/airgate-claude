@@ -16,13 +16,13 @@ import (
 )
 
 // ──────────────────────────────────────────────────────
-// Node.js 24.x / Claude Code TLS 指纹配置
-// 移植自 sub2api tlsfingerprint/dialer.go
-// JA3: 44f88fca027f27bab4bb08d4af15f23e
-// JA4: t13d1714h1_5b57614c22b0_7baf387fc6ff
+// Claude Code 2.1.112 (Bun 1.3.13) TLS 指纹配置
+// ALPN: h2, http/1.1
+// 真实 JA3/JA4 baseline 由 backend/cmd/fp capture 产出
 // ──────────────────────────────────────────────────────
 
-// defaultCipherSuites Node.js 24.x 的 17 个 cipher suites（顺序关键）
+// defaultCipherSuites Bun 1.3.13 BoringSSL cipher 顺序
+// （与 Node 24.x 近似，后续由 fp capture 精确校正）
 var defaultCipherSuites = []uint16{
 	// TLS 1.3
 	0x1301, // TLS_AES_128_GCM_SHA256
@@ -69,24 +69,33 @@ var defaultSignatureAlgorithms = []utls.SignatureScheme{
 	0x0201, // rsa_pkcs1_sha1
 }
 
-// buildClientHelloSpec 构建 Node.js 24.x 的 ClientHello
-func buildClientHelloSpec() *utls.ClientHelloSpec {
-	// Node.js 24.x extension 顺序
+// buildBunClientHelloSpec 构建 Bun 1.3.x 的 ClientHello（与真实 CLI 一致）
+//
+// Ground truth（由 bun 1.3.x + tls.peet.ws 抓包确认，JA3 hash=44f88fca027f27bab4bb08d4af15f23e）：
+//   - cipher suites 17 项，无 GREASE 前缀
+//   - 扩展顺序：SNI → ECH(65037) → EMS → reneg → curves → pts → ticket → ALPN →
+//     status_req → sig_algs → SCT → key_share → PSK_modes → versions
+//   - ALPN 只 http/1.1（Bun fetch 不自动协商 h2，Claude CLI 同样）
+//   - curves / key_share / supported_versions 均不含 GREASE
+//
+// 多账号维度的差异由 uTLS 每连接独立的 ECH GREASE 值 + 独立 Transport 池承担，
+// 不应通过人为加 GREASE 打乱 JA3。
+func buildBunClientHelloSpec() *utls.ClientHelloSpec {
 	extensions := []utls.TLSExtension{
-		&utls.SNIExtension{},                                                                       // 0: server_name
-		&utls.GREASEEncryptedClientHelloExtension{},                                                // 65037: ECH (GREASE)
-		&utls.ExtendedMasterSecretExtension{},                                                      // 23: extended_master_secret
-		&utls.RenegotiationInfoExtension{},                                                         // 65281: renegotiation_info
-		&utls.SupportedCurvesExtension{Curves: defaultCurves},                                      // 10: supported_groups
-		&utls.SupportedPointsExtension{SupportedPoints: []uint8{0}},                                // 11: ec_point_formats (uncompressed only)
-		&utls.SessionTicketExtension{},                                                             // 35: session_ticket
-		&utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}},                                  // 16: alpn
-		&utls.StatusRequestExtension{},                                                             // 5: status_request (OCSP)
-		&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: defaultSignatureAlgorithms}, // 13: signature_algorithms
-		&utls.SCTExtension{},                                                                       // 18: signed_certificate_timestamp
-		&utls.KeyShareExtension{KeyShares: []utls.KeyShare{{Group: utls.X25519}}},                  // 51: key_share
-		&utls.PSKKeyExchangeModesExtension{Modes: []uint8{uint8(utls.PskModeDHE)}},                // 45: psk_key_exchange_modes
-		&utls.SupportedVersionsExtension{Versions: []uint16{utls.VersionTLS13, utls.VersionTLS12}}, // 43: supported_versions
+		&utls.SNIExtension{},                                                                            // 0:  server_name
+		&utls.GREASEEncryptedClientHelloExtension{},                                                     // 65037: ECH (boringssl GREASE)
+		&utls.ExtendedMasterSecretExtension{},                                                           // 23
+		&utls.RenegotiationInfoExtension{Renegotiation: utls.RenegotiateOnceAsClient},                   // 65281
+		&utls.SupportedCurvesExtension{Curves: defaultCurves},                                           // 10
+		&utls.SupportedPointsExtension{SupportedPoints: []uint8{0}},                                     // 11 (uncompressed)
+		&utls.SessionTicketExtension{},                                                                  // 35
+		&utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}},                                        // 16
+		&utls.StatusRequestExtension{},                                                                  // 5
+		&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: defaultSignatureAlgorithms},    // 13
+		&utls.SCTExtension{},                                                                            // 18
+		&utls.KeyShareExtension{KeyShares: []utls.KeyShare{{Group: utls.X25519}}},                       // 51
+		&utls.PSKKeyExchangeModesExtension{Modes: []uint8{uint8(utls.PskModeDHE)}},                      // 45
+		&utls.SupportedVersionsExtension{Versions: []uint16{utls.VersionTLS13, utls.VersionTLS12}},      // 43
 	}
 
 	return &utls.ClientHelloSpec{
@@ -94,7 +103,26 @@ func buildClientHelloSpec() *utls.ClientHelloSpec {
 		CompressionMethods: []uint8{0}, // null only
 		Extensions:         extensions,
 		TLSVersMax:         utls.VersionTLS13,
-		TLSVersMin:         utls.VersionTLS10,
+		TLSVersMin:         utls.VersionTLS12, // Bun BoringSSL 起点
+	}
+}
+
+// ExportBunClientHelloSpec 暴露给 fp CLI 使用，返回当前 Bun baseline 的 ClientHelloSpec。
+// 仅供 backend/cmd/fp 等内部工具使用，不属于插件对外契约。
+func ExportBunClientHelloSpec() *utls.ClientHelloSpec {
+	return buildBunClientHelloSpec()
+}
+
+// selectClientHelloSpec 按账号配置的 tls_profile 返回对应 ClientHelloSpec。
+//
+// 当前仅有一个 baseline（bun-2.1.112），未知/空值均走 auto。
+// 新增 baseline 时只需在此处追加 case。
+func selectClientHelloSpec(profile string) *utls.ClientHelloSpec {
+	switch profile {
+	case "bun-2.1.112":
+		return buildBunClientHelloSpec()
+	default: // "", "auto", 未知值
+		return buildBunClientHelloSpec()
 	}
 }
 
@@ -102,8 +130,19 @@ func buildClientHelloSpec() *utls.ClientHelloSpec {
 // TLS 指纹 Transport 构建
 // ──────────────────────────────────────────────────────
 
-// buildFingerprintTransport 构建带 Node.js 24.x TLS 指纹的 HTTP Transport
+// buildFingerprintTransport 构建带 Bun 1.3.x TLS 指纹的 Transport
+//
+// Bun 默认 fetch 只协商 http/1.1（ground truth），因此：
+//   - ALPN 只带 http/1.1
+//   - ForceAttemptHTTP2=false，不启 http2.ConfigureTransport
+//
+// 不强制 h2 是刻意的：Anthropic 侧有行为模型对比，配置与真实 CLI 不一致会拉高识别分数。
 func buildFingerprintTransport(proxyURL string) *http.Transport {
+	return buildFingerprintTransportWithProfile(proxyURL, "")
+}
+
+// buildFingerprintTransportWithProfile 允许账号指定 tls_profile 精确选择 ClientHelloSpec
+func buildFingerprintTransportWithProfile(proxyURL, profile string) *http.Transport {
 	dialer := &net.Dialer{
 		Timeout:   httpDialTimeout,
 		KeepAlive: 30 * time.Second,
@@ -144,9 +183,10 @@ func buildFingerprintTransport(proxyURL string) *http.Transport {
 			ServerName:         host,
 			InsecureSkipVerify: false,
 			MinVersion:         tls.VersionTLS12,
+			NextProtos:         []string{"http/1.1"},
 		}, utls.HelloCustom)
 
-		if err := tlsConn.ApplyPreset(buildClientHelloSpec()); err != nil {
+		if err := tlsConn.ApplyPreset(selectClientHelloSpec(profile)); err != nil {
 			_ = rawConn.Close()
 			return nil, fmt.Errorf("apply TLS preset: %w", err)
 		}
