@@ -30,29 +30,26 @@ const (
 // 转发入口
 // ──────────────────────────────────────────────────────
 
-// forwardHTTP 根据请求路径和账号类型分发
-func (g *AnthropicGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest) (*sdk.ForwardResult, error) {
+// forwardHTTP 根据请求路径和账号类型分发。
+func (g *AnthropicGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
 	path := resolveRequestPath(req)
 
-	// /v1/models 路径：直接返回硬编码模型列表
 	if path == "/v1/models" {
-		return g.handleModelsRequest(req)
+		return g.handleModelsRequest(req), nil
 	}
-
-	// /v1/messages/count_tokens 路径：使用专用的 count_tokens 转发逻辑
 	if path == "/v1/messages/count_tokens" {
 		return g.forwardCountTokens(ctx, req)
 	}
 
 	account := req.Account
-
 	switch account.Type {
 	case "apikey":
 		return g.forwardAPIKey(ctx, req, path)
-	case "oauth", "session_key": // session_key 向后兼容，新账号统一为 oauth
+	case "oauth", "session_key":
 		return g.forwardOAuth(ctx, req, path)
 	default:
-		return nil, fmt.Errorf("未知的账号类型: %s", account.Type)
+		reason := fmt.Sprintf("未知的账号类型: %s", account.Type)
+		return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
 	}
 }
 
@@ -60,68 +57,47 @@ func (g *AnthropicGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequ
 // API Key 模式：直接转发到上游
 // ──────────────────────────────────────────────────────
 
-func (g *AnthropicGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRequest, path string) (*sdk.ForwardResult, error) {
+func (g *AnthropicGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRequest, path string) (sdk.ForwardOutcome, error) {
 	start := time.Now()
 	account := req.Account
 
-	// 构建目标 URL
 	targetURL := resolveBaseURL(account.Credentials) + path
-
-	// 预处理请求体：规范化模型 ID（不修改 metadata.user_id）
 	body := preprocessBody(req.Body)
 
-	// 构建 HTTP 请求
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("构建上游请求失败: %w", err)
+		reason := fmt.Sprintf("构建上游请求失败: %v", err)
+		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
-
-	// 设置认证与协议头
 	setAnthropicAuthHeaders(upstreamReq, account, req.Headers, req.Model)
 
-	// 发送请求（使用连接池）
 	client := g.getHTTPClient(account)
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
-		return nil, fmt.Errorf("请求上游失败: %w", err)
+		return transientOutcome(err.Error()), fmt.Errorf("请求上游失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// 上游返回错误
 	if resp.StatusCode >= 400 {
-		result, fwdErr := handleErrorResponse(resp, req.Writer, start)
-		if result != nil {
-			result.ErrorMessage = extractErrorMessage(result.Body)
-			fillCost(result)
-		}
-		return result, fwdErr
+		return handleErrorResponse(resp, req.Writer, start), nil
 	}
 
-	// 流式/非流式分发
-	var result *sdk.ForwardResult
-	var fwdErr error
 	if req.Stream && req.Writer != nil {
-		result, fwdErr = handleStreamResponse(resp, req.Writer, start)
-	} else {
-		result, fwdErr = handleNonStreamResponse(resp, req.Writer, start)
+		return handleStreamResponse(resp, req.Writer, start)
 	}
-	if result != nil {
-		fillCost(result)
-	}
-	return result, fwdErr
+	return handleNonStreamResponse(resp, req.Writer, start)
 }
 
 // ──────────────────────────────────────────────────────
 // OAuth 模式：使用 OAuth token 转发
 // ──────────────────────────────────────────────────────
 
-func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardRequest, path string) (*sdk.ForwardResult, error) {
+func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardRequest, path string) (sdk.ForwardOutcome, error) {
 	start := time.Now()
 	account := req.Account
 
-	// Claude Code 客户端身份闸：优先读 Core 下发的分组级头
-	//   X-Airgate-Plugin-Claude-Claude-Code-Only: true
-	// 兼容旧的账号级凭证 claude_code_only=true（后续版本可删）。
+	// Claude Code 客户端身份闸：X-Airgate-Plugin-Claude-Claude-Code-Only: true 或
+	// 账号级凭证 claude_code_only=true。
 	ccOnly := strings.EqualFold(req.Headers.Get("X-Airgate-Plugin-Claude-Claude-Code-Only"), "true") ||
 		strings.EqualFold(account.Credentials["claude_code_only"], "true")
 	if ccOnly {
@@ -135,87 +111,70 @@ func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReq
 		}
 	}
 
-	// 登记到 sidecar 账号注册表，供 usagePoller 使用
 	if g.registry != nil {
 		g.registry.register(account)
 	}
 
-	// 通过 tokenManager 检查并自动刷新过期 token（加锁 + double-check + 重试）
 	updatedCreds, err := g.tokenMgr.ensureValidToken(ctx, account)
 	if err != nil {
-		return nil, fmt.Errorf("token 刷新失败: %w", err)
+		// token 刷新失败的原因千差万别（refresh_token 吊销 → 账号死；网络抖动 → transient）；
+		// 这里保守按 AccountDead 处理，让核心把账号打 disabled 等待人工介入重新授权。
+		reason := fmt.Sprintf("token 刷新失败: %v", err)
+		return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
 	}
-
-	// 若刚刚刷新过 token，异步发起一次 max_tokens=1 探测（postRefreshProbe）
 	if len(updatedCreds) > 0 && g.sidecar != nil {
 		g.sidecar.fireRefreshProbe(account)
 	}
-
 	if account.Credentials["access_token"] == "" {
-		return nil, fmt.Errorf("OAuth 账号缺少 access_token")
+		reason := "OAuth 账号缺少 access_token"
+		return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
 	}
 
-	// 统一使用 resolveBaseURL（支持自定义 base_url）
 	// OAuth 账号必须带 ?beta=true 参数（参考 sub2api）
 	targetURL := resolveBaseURL(account.Credentials) + path + "?beta=true"
-
-	// 预处理请求体
 	body := preprocessBody(req.Body)
-	// OAuth 账号额外处理：注入 metadata.user_id、tools 等 Claude Code 伪装字段
 	body = preprocessOAuthBody(body, account)
 
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("构建上游请求失败: %w", err)
+		reason := fmt.Sprintf("构建上游请求失败: %v", err)
+		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
-
 	setAnthropicAuthHeaders(upstreamReq, account, req.Headers, req.Model)
-
-	// 流式请求加上 helper-method header（参考 sub2api）
 	if req.Stream {
 		setRawHeader(upstreamReq.Header, "x-stainless-helper-method", "stream")
 	}
 
-	// 使用连接池
 	client := g.getHTTPClient(account)
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
-		return nil, fmt.Errorf("请求上游失败: %w", err)
+		return transientOutcome(err.Error()), fmt.Errorf("请求上游失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
-		result, fwdErr := handleErrorResponse(resp, req.Writer, start)
-		if result != nil {
-			result.ErrorMessage = extractErrorMessage(result.Body)
-			fillCost(result)
-			if len(updatedCreds) > 0 {
-				result.UpdatedCredentials = updatedCreds
-			}
+		outcome := handleErrorResponse(resp, req.Writer, start)
+		if len(updatedCreds) > 0 {
+			outcome.UpdatedCredentials = updatedCreds
 		}
-		return result, fwdErr
+		return outcome, nil
 	}
 
-	var result *sdk.ForwardResult
-	var fwdErr error
+	var outcome sdk.ForwardOutcome
 	if req.Stream && req.Writer != nil {
-		result, fwdErr = handleStreamResponse(resp, req.Writer, start)
+		outcome, err = handleStreamResponse(resp, req.Writer, start)
 	} else {
-		result, fwdErr = handleNonStreamResponse(resp, req.Writer, start)
+		outcome, err = handleNonStreamResponse(resp, req.Writer, start)
 	}
-	if result != nil {
-		fillCost(result)
-		if len(updatedCreds) > 0 {
-			result.UpdatedCredentials = updatedCreds
-		}
+	if len(updatedCreds) > 0 {
+		outcome.UpdatedCredentials = updatedCreds
 	}
 
 	// 成功响应后异步补发 count_tokens，模拟真实 CLI 的 token 估算流量
-	if fwdErr == nil && result != nil && result.StatusCode < 400 && g.sidecar != nil {
+	if err == nil && outcome.Kind == sdk.OutcomeSuccess && g.sidecar != nil {
 		g.sidecar.scheduleCountTokens(account.ID, body)
 	}
-
-	return result, fwdErr
+	return outcome, err
 }
 
 // Token 刷新逻辑已迁移到 token_manager.go
@@ -224,19 +183,15 @@ func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReq
 // /v1/models 处理
 // ──────────────────────────────────────────────────────
 
-func (g *AnthropicGateway) handleModelsRequest(req *sdk.ForwardRequest) (*sdk.ForwardResult, error) {
+func (g *AnthropicGateway) handleModelsRequest(req *sdk.ForwardRequest) sdk.ForwardOutcome {
 	body := buildModelsResponse()
-
 	if req.Writer != nil {
 		req.Writer.Header().Set("Content-Type", "application/json")
 		req.Writer.WriteHeader(http.StatusOK)
 		_, _ = req.Writer.Write(body)
 	}
-
-	return &sdk.ForwardResult{
-		StatusCode: http.StatusOK,
-		Body:       body,
-	}, nil
+	headers := http.Header{"Content-Type": []string{"application/json"}}
+	return successOutcome(http.StatusOK, body, headers, nil)
 }
 
 // ──────────────────────────────────────────────────────
@@ -428,63 +383,49 @@ func normalizeRequestBody(body []byte) []byte {
 	return bytes.Replace(body, []byte(`"model":"`+modelID+`"`), []byte(`"model":"`+normalized+`"`), 1)
 }
 
-// handleErrorResponse 处理上游错误响应。
+// handleErrorResponse 把上游 4xx/5xx 响应归类为 ForwardOutcome。
 //
-// 分三类处理：
-//   - 账号级错误（disabled/expired/rate_limited，含 400 "organization disabled"）：
-//     不写 w，保持 c.Writer unwritten 让 Core 能 failover；返回 error 触发重试和惩罚。
-//   - 普通 4xx（请求参数有误等客户端侧错误）：透传给客户端，返回 nil 让 Core 识别为 client error。
-//   - 5xx：透传给客户端，返回 error 让 Core 报告失败。
-func handleErrorResponse(resp *http.Response, w http.ResponseWriter, start time.Time) (*sdk.ForwardResult, error) {
+//   - ClientError（普通 4xx）：写 w 透传给客户端，Core 不 failover
+//   - AccountRateLimited / AccountDead（429/401/403/400 含账号级文本）：不写 w，保持 Writer
+//     unwritten 让 Core canFailover 不被短路；Core 会 failover + 触发状态机
+//   - UpstreamTransient（5xx）：不写 w，让 Core failover
+func handleErrorResponse(resp *http.Response, w http.ResponseWriter, start time.Time) sdk.ForwardOutcome {
 	respBody, _ := io.ReadAll(resp.Body)
+	msg := extractErrorMessage(respBody)
+	if msg == "" {
+		msg = truncate(string(respBody), 200)
+	}
 
-	accountStatus := accountStatusFromBody(resp.StatusCode, respBody)
-	isAccountError := accountStatus != sdk.AccountStatusOK
+	outcome := failureOutcome(resp.StatusCode, respBody, resp.Header.Clone(), msg, extractRetryAfterHeader(resp.Header))
+	outcome.Duration = time.Since(start)
 
-	// 账号级错误不写 w：让 c.Writer 保持 unwritten，Core 的 canFailover 才不会被短路
-	if !isAccountError && w != nil {
+	// 仅 ClientError 透传给客户端；账号级 / 上游抖动保持 w unwritten 以便 failover
+	if outcome.Kind == sdk.OutcomeClientError && w != nil {
 		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(respBody)
 	}
-
-	result := &sdk.ForwardResult{
-		StatusCode:    resp.StatusCode,
-		Duration:      time.Since(start),
-		AccountStatus: accountStatus,
-		RetryAfter:    extractRetryAfterHeader(resp.Header),
-		Body:          respBody,
-		Headers:       resp.Header,
-	}
-
-	// 账号级错误或 5xx：返回 error 触发 Core failover + ReportAccountError
-	if isAccountError || resp.StatusCode >= 500 {
-		return result, fmt.Errorf("上游返回 %d: %s", resp.StatusCode, truncate(string(respBody), 200))
-	}
-
-	// 普通 4xx（客户端请求有误）：返回 nil，Core 识别为 client error 不做 failover
-	return result, nil
+	return outcome
 }
 
-// rejectNonCCRequest 构造 403 响应，供 claude_code_only 账号使用。
-// 不走 handleErrorResponse 因为这是网关主动拒绝，不是上游返回。
-//
-// 关键：AccountStatus 显式标 OK，ErrorMessage 是客户端侧错误语义。
-// Core 的 forwarder_result / host_service 识别 AccountStatus 决定是否
-// 关闭账号调度——我们不希望 CC 闸误判成账号故障。
-func rejectNonCCRequest(w http.ResponseWriter, reason string, start time.Time) *sdk.ForwardResult {
+// rejectNonCCRequest 网关主动拒绝非 Claude Code 客户端，归为 ClientError。
+// 账号本身没问题，不应关闭调度——Core 看到 ClientError 就不会罚账号。
+func rejectNonCCRequest(w http.ResponseWriter, reason string, start time.Time) sdk.ForwardOutcome {
 	body := ccRejectBody(reason)
 	if w != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write(body)
 	}
-	return &sdk.ForwardResult{
-		StatusCode:    http.StatusForbidden,
-		Duration:      time.Since(start),
-		Body:          body,
-		ErrorMessage:  "claude_code_only: " + reason,
-		AccountStatus: sdk.AccountStatusOK, // 客户端侧错误，不是账号故障
+	return sdk.ForwardOutcome{
+		Kind: sdk.OutcomeClientError,
+		Upstream: sdk.UpstreamResponse{
+			StatusCode: http.StatusForbidden,
+			Headers:    http.Header{"Content-Type": []string{"application/json"}},
+			Body:       body,
+		},
+		Reason:   "claude_code_only: " + reason,
+		Duration: time.Since(start),
 	}
 }
 

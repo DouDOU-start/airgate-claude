@@ -151,36 +151,36 @@ func specToModelInfo(id string, spec Spec) *sdk.ModelInfo {
 	}
 }
 
-// fillCost 根据 ForwardResult 中的 token 数和模型价格填充费用字段
-func fillCost(result *sdk.ForwardResult) {
-	modelID := result.Model
-	if modelID == "" {
+// fillUsageCost 根据 Usage 中的 token 数和模型价格填充费用 / 单价字段。
+// 未知 model 会通过 LookupModel 兜底到 Sonnet 价格。
+func fillUsageCost(usage *sdk.Usage) {
+	if usage == nil || usage.Model == "" {
 		return
 	}
-	model := LookupModel(modelID)
+	model := LookupModel(usage.Model)
 	if model == nil {
 		return
 	}
 
 	cost := sdk.CalculateCost(sdk.CostInput{
-		InputTokens:           result.InputTokens,
-		OutputTokens:          result.OutputTokens,
-		CachedInputTokens:     result.CachedInputTokens,
-		CacheCreationTokens:   result.CacheCreationTokens,
-		CacheCreation5mTokens: result.CacheCreation5mTokens,
-		CacheCreation1hTokens: result.CacheCreation1hTokens,
-		ServiceTier:           result.ServiceTier,
+		InputTokens:           usage.InputTokens,
+		OutputTokens:          usage.OutputTokens,
+		CachedInputTokens:     usage.CachedInputTokens,
+		CacheCreationTokens:   usage.CacheCreationTokens,
+		CacheCreation5mTokens: usage.CacheCreation5mTokens,
+		CacheCreation1hTokens: usage.CacheCreation1hTokens,
+		ServiceTier:           usage.ServiceTier,
 	}, *model)
 
-	result.InputCost = cost.InputCost
-	result.OutputCost = cost.OutputCost
-	result.CachedInputCost = cost.CachedInputCost
-	result.CacheCreationCost = cost.CacheCreationCost
-	result.InputPrice = model.InputPrice
-	result.OutputPrice = model.OutputPrice
-	result.CachedInputPrice = model.CachedInputPrice
-	result.CacheCreationPrice = model.CacheCreationPrice
-	result.CacheCreation1hPrice = model.CacheCreation1hPrice
+	usage.InputCost = cost.InputCost
+	usage.OutputCost = cost.OutputCost
+	usage.CachedInputCost = cost.CachedInputCost
+	usage.CacheCreationCost = cost.CacheCreationCost
+	usage.InputPrice = model.InputPrice
+	usage.OutputPrice = model.OutputPrice
+	usage.CachedInputPrice = model.CachedInputPrice
+	usage.CacheCreationPrice = model.CacheCreationPrice
+	usage.CacheCreation1hPrice = model.CacheCreation1hPrice
 }
 
 // claudeModelListEntry Anthropic /v1/models 接口返回的单个模型

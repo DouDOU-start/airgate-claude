@@ -89,13 +89,13 @@ func (g *AnthropicGateway) Routes() []sdk.RouteDefinition {
 	return PluginRouteDefinitions()
 }
 
-func (g *AnthropicGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (*sdk.ForwardResult, error) {
+func (g *AnthropicGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
 	return g.forwardHTTP(ctx, req)
 }
 
 // HandleWebSocket 不支持 WebSocket
-func (g *AnthropicGateway) HandleWebSocket(_ context.Context, _ sdk.WebSocketConn) (*sdk.ForwardResult, error) {
-	return nil, sdk.ErrNotSupported
+func (g *AnthropicGateway) HandleWebSocket(_ context.Context, _ sdk.WebSocketConn) (sdk.ForwardOutcome, error) {
+	return sdk.ForwardOutcome{}, sdk.ErrNotSupported
 }
 
 // ValidateAccount 验证凭证有效性
@@ -542,52 +542,52 @@ func buildCountTokensHeaders(req *http.Request, account *sdk.Account) {
 	setRawHeader(req.Header, "content-type", "application/json")
 }
 
-// forwardCountTokens 转发 count_tokens 请求
-func (g *AnthropicGateway) forwardCountTokens(ctx context.Context, req *sdk.ForwardRequest) (*sdk.ForwardResult, error) {
+// forwardCountTokens 转发 count_tokens 请求。
+func (g *AnthropicGateway) forwardCountTokens(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
 	start := time.Now()
 	account := req.Account
 
 	targetURL := resolveBaseURL(account.Credentials) + "/v1/messages/count_tokens?beta=true"
-
 	body := normalizeRequestBody(req.Body)
 
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("构建上游请求失败: %w", err)
+		reason := fmt.Sprintf("构建上游请求失败: %v", err)
+		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
-
 	buildCountTokensHeaders(upstreamReq, account)
 
 	client := g.getHTTPClient(account)
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
-		return nil, fmt.Errorf("请求上游失败: %w", err)
+		return transientOutcome(err.Error()), fmt.Errorf("请求上游失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("读取上游响应失败: %w", err)
+		reason := fmt.Sprintf("读取上游响应失败: %v", err)
+		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
-
 	if req.Writer != nil {
 		req.Writer.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 		req.Writer.WriteHeader(resp.StatusCode)
 		_, _ = req.Writer.Write(respBody)
 	}
 
+	elapsed := time.Since(start)
 	if resp.StatusCode >= 400 {
-		return &sdk.ForwardResult{
-			StatusCode:    resp.StatusCode,
-			Duration:      time.Since(start),
-			AccountStatus: accountStatusFromCode(resp.StatusCode),
-		}, fmt.Errorf("上游返回 %d: %s", resp.StatusCode, truncate(string(respBody), 200))
+		msg := extractErrorMessage(respBody)
+		if msg == "" {
+			msg = truncate(string(respBody), 200)
+		}
+		outcome := failureOutcome(resp.StatusCode, respBody, resp.Header.Clone(), msg, extractRetryAfterHeader(resp.Header))
+		outcome.Duration = elapsed
+		return outcome, nil
 	}
-
-	return &sdk.ForwardResult{
-		StatusCode: resp.StatusCode,
-		Duration:   time.Since(start),
-		Body:       respBody,
-		Headers:    resp.Header,
+	return sdk.ForwardOutcome{
+		Kind:     sdk.OutcomeSuccess,
+		Upstream: sdk.UpstreamResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: respBody},
+		Duration: elapsed,
 	}, nil
 }
