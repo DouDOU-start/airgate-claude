@@ -38,15 +38,6 @@ func classifyHTTPFailure(statusCode int, message string) sdk.OutcomeKind {
 	return sdk.OutcomeSuccess
 }
 
-// classifyAnthropicBody 从 Anthropic 错误响应体归一化 OutcomeKind（处理 400 账号级错误）。
-func classifyAnthropicBody(statusCode int, body []byte) sdk.OutcomeKind {
-	msg := gjson.GetBytes(body, "error.message").String()
-	if msg == "" {
-		msg = string(body)
-	}
-	return classifyHTTPFailure(statusCode, msg)
-}
-
 func isDisabledAccountText(s string) bool {
 	lower := strings.ToLower(s)
 	return strings.Contains(lower, "disabled") ||
