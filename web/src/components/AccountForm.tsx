@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { cssVar } from '@airgate/theme';
 
 /** 批量 Session Key 换取结果（单条） */
@@ -109,6 +109,74 @@ const sectionStyle: React.CSSProperties = {
   backgroundColor: cssVar('bgSurface'),
 };
 
+const selectWrapStyle: React.CSSProperties = {
+  position: 'relative',
+};
+
+const selectButtonStyle: React.CSSProperties = {
+  ...inputStyle,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '0.5rem',
+  fontFamily: 'inherit',
+  textAlign: 'left',
+  cursor: 'pointer',
+};
+
+const selectButtonOpenStyle: React.CSSProperties = {
+  borderColor: cssVar('primary'),
+  boxShadow: `0 0 0 3px ${cssVar('primarySubtle')}`,
+};
+
+const selectButtonTextStyle: React.CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const selectCaretStyle: React.CSSProperties = {
+  flexShrink: 0,
+  color: cssVar('textTertiary'),
+  fontSize: '0.625rem',
+  lineHeight: 1,
+};
+
+const selectDropdownStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  top: 'calc(100% + 0.375rem)',
+  zIndex: 20,
+  display: 'flex',
+  flexDirection: 'column',
+  padding: '0.375rem',
+  border: `1px solid ${cssVar('glassBorder')}`,
+  borderRadius: cssVar('radiusMd'),
+  backgroundColor: cssVar('bgSurface'),
+  boxShadow: '0 18px 48px rgba(0, 0, 0, 0.28)',
+};
+
+const selectOptionStyle: React.CSSProperties = {
+  padding: '0.5rem 0.625rem',
+  border: 'none',
+  borderRadius: '0.5rem',
+  background: 'transparent',
+  color: cssVar('textSecondary'),
+  fontFamily: 'inherit',
+  fontSize: '0.8125rem',
+  lineHeight: 1.35,
+  textAlign: 'left',
+  cursor: 'pointer',
+};
+
+const selectOptionActiveStyle: React.CSSProperties = {
+  backgroundColor: cssVar('primarySubtle'),
+  color: cssVar('primary'),
+  fontWeight: 600,
+};
+
 // ── 类型定义 ──
 
 /** UI 分类：Claude Code（OAuth 系列）或 Claude Console（API Key） */
@@ -119,6 +187,7 @@ type AccountType = 'apikey' | 'oauth' | 'session_key';
 
 /** Claude Code 内部的获取方式 */
 type AcquireMethod = 'session_key' | 'browser_oauth';
+type SelectOption = { value: string; label: string };
 
 function detectCategory(accountType?: string, credentials?: Record<string, string>): UICategory {
   if (accountType === 'apikey') return 'claude_console';
@@ -134,6 +203,58 @@ function detectAcquireMethod(accountType?: string, credentials?: Record<string, 
 }
 
 // ── 状态提示组件 ──
+
+function CustomSelect({ value, options, onChange }: { value: string; options: SelectOption[]; onChange: (value: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const selected = options.find((option) => option.value === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={selectWrapStyle}>
+      <button
+        type="button"
+        style={{ ...selectButtonStyle, ...(open ? selectButtonOpenStyle : null) }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span style={selectButtonTextStyle}>{selected?.label ?? ''}</span>
+        <span aria-hidden="true" style={selectCaretStyle}>v</span>
+      </button>
+      {open && (
+        <div role="listbox" style={selectDropdownStyle}>
+          {options.map((option) => {
+            const isSelected = option.value === value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                style={{ ...selectOptionStyle, ...(isSelected ? selectOptionActiveStyle : null) }}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function StatusMessage({ status }: { status: { type: 'info' | 'success' | 'error'; text: string } | null }) {
   if (!status) return null;
@@ -743,14 +864,14 @@ export function AccountForm({
           {!isBatchActive && (
             <div>
               <label style={labelStyle}>TLS 指纹 Profile</label>
-              <select
-                style={{ ...inputStyle, appearance: 'auto' }}
+              <CustomSelect
                 value={credentials.tls_profile ?? 'auto'}
-                onChange={(e) => updateField('tls_profile', e.target.value)}
-              >
-                <option value="auto">Auto（默认，跟随最新 baseline）</option>
-                <option value="bun-2.1.112">bun-2.1.112（固定当前版本）</option>
-              </select>
+                onChange={(value) => updateField('tls_profile', value)}
+                options={[
+                  { value: 'auto', label: 'Auto（默认，跟随最新 baseline）' },
+                  { value: 'bun-2.1.112', label: 'bun-2.1.112（固定当前版本）' },
+                ]}
+              />
               <div style={{ ...descStyle, marginTop: '0.375rem' }}>
                 Auto 自动使用网关内置的最新 Claude CLI 指纹；若上游风控与网关升级节奏不匹配，可手动固定某一 baseline。
               </div>
