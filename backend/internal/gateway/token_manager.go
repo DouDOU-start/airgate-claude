@@ -73,7 +73,11 @@ func (m *tokenManager) ensureValidToken(ctx context.Context, account *sdk.Accoun
 
 	expiresAt, err := time.Parse(time.RFC3339, expiresAtStr)
 	if err != nil {
-		m.logger.Warn("解析 expires_at 失败", "expires_at", expiresAtStr, "error", err)
+		m.logger.Warn("token_expires_at_parse_failed",
+			sdk.LogFieldAccountID, account.ID,
+			"expires_at", expiresAtStr,
+			sdk.LogFieldError, err,
+		)
 		return nil, nil
 	}
 
@@ -87,9 +91,18 @@ func (m *tokenManager) ensureValidToken(ctx context.Context, account *sdk.Accoun
 
 // ensureSessionKeyExchange 使用 session_key 换取 OAuth token（加锁保护）
 func (m *tokenManager) ensureSessionKeyExchange(ctx context.Context, account *sdk.Account) (map[string]string, error) {
+	logger := sdk.LoggerFromContext(ctx)
+	if logger == nil {
+		logger = m.logger
+	}
 	sessionKey := account.Credentials["session_key"]
 	if sessionKey == "" {
-		return nil, fmt.Errorf("session key 账号缺少 session_key")
+		err := fmt.Errorf("session key 账号缺少 session_key")
+		logger.Warn("session_key_exchange_failed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldError, err,
+		)
+		return nil, err
 	}
 
 	state := m.getState(account.ID)
@@ -101,10 +114,16 @@ func (m *tokenManager) ensureSessionKeyExchange(ctx context.Context, account *sd
 		return nil, nil
 	}
 
-	m.logger.Info("Session Key 换取 token", "account_id", account.ID)
+	logger.Debug("session_key_exchange_start", sdk.LogFieldAccountID, account.ID)
 
+	exchangeStart := time.Now()
 	tokenResp, err := m.gateway.ExchangeSessionKeyForToken(ctx, sessionKey, account.ProxyURL)
 	if err != nil {
+		logger.Warn("session_key_exchange_failed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldDurationMs, time.Since(exchangeStart).Milliseconds(),
+			sdk.LogFieldError, err,
+		)
 		return nil, fmt.Errorf("session key 换取 token 失败: %w", err)
 	}
 
@@ -124,12 +143,20 @@ func (m *tokenManager) ensureSessionKeyExchange(ctx context.Context, account *sd
 	state.lastRefreshAt = time.Now()
 	state.lastToken = tokenResp.AccessToken
 
-	m.logger.Info("Session Key 换取 token 成功", "account_id", account.ID)
+	logger.Debug("session_key_exchange_completed",
+		sdk.LogFieldAccountID, account.ID,
+		sdk.LogFieldDurationMs, time.Since(exchangeStart).Milliseconds(),
+		"expires_at", expiresAt,
+	)
 	return updated, nil
 }
 
 // doRefresh 执行实际的 token 刷新（加锁 + double-check + 重试）
 func (m *tokenManager) doRefresh(ctx context.Context, account *sdk.Account) (map[string]string, error) {
+	logger := sdk.LoggerFromContext(ctx)
+	if logger == nil {
+		logger = m.logger
+	}
 	state := m.getState(account.ID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -149,16 +176,17 @@ func (m *tokenManager) doRefresh(ctx context.Context, account *sdk.Account) (map
 	// 检查冷却窗口：最近的错误是不可重试的，不重复刷新
 	if state.lastError != nil && time.Since(state.lastErrorAt) < refreshCooldown {
 		if isNonRetryableRefreshError(state.lastError) {
-			m.logger.Warn("Token 刷新处于冷却期（不可重试错误）",
-				"account_id", account.ID,
-				"error", state.lastError,
-				"cooldown_remaining", refreshCooldown-time.Since(state.lastErrorAt),
+			logger.Warn("token_refresh_cooldown",
+				sdk.LogFieldAccountID, account.ID,
+				sdk.LogFieldError, state.lastError,
+				"cooldown_remaining_ms", (refreshCooldown - time.Since(state.lastErrorAt)).Milliseconds(),
 			)
 			return nil, nil // 不阻断请求，使用现有 token
 		}
 	}
 
-	m.logger.Info("Token 即将过期，自动刷新", "account_id", account.ID)
+	logger.Debug("token_refresh_start", sdk.LogFieldAccountID, account.ID)
+	refreshStart := time.Now()
 
 	refreshToken := account.Credentials["refresh_token"]
 	proxyURL := account.ProxyURL
@@ -182,18 +210,20 @@ func (m *tokenManager) doRefresh(ctx context.Context, account *sdk.Account) (map
 			if isNonRetryableRefreshError(err) {
 				state.lastError = err
 				state.lastErrorAt = time.Now()
-				m.logger.Error("Token 刷新遇到不可重试错误",
-					"account_id", account.ID,
-					"error", err,
+				logger.Warn("token_refresh_failed",
+					sdk.LogFieldAccountID, account.ID,
+					sdk.LogFieldDurationMs, time.Since(refreshStart).Milliseconds(),
+					sdk.LogFieldError, err,
 					"attempt", attempt+1,
+					sdk.LogFieldReason, "non_retryable",
 				)
 				// 不阻断请求，使用现有 token（匹配 sub2api Claude 策略）
 				return nil, nil
 			}
 
-			m.logger.Warn("Token 刷新失败，重试中",
-				"account_id", account.ID,
-				"error", err,
+			logger.Warn("token_refresh_retry",
+				sdk.LogFieldAccountID, account.ID,
+				sdk.LogFieldError, err,
 				"attempt", attempt+1,
 				"max_retries", maxRefreshRetries,
 			)
@@ -225,8 +255,9 @@ func (m *tokenManager) doRefresh(ctx context.Context, account *sdk.Account) (map
 			updated["refresh_token"] = tokenResp.RefreshToken
 		}
 
-		m.logger.Info("Token 自动刷新成功",
-			"account_id", account.ID,
+		logger.Debug("token_refresh_completed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldDurationMs, time.Since(refreshStart).Milliseconds(),
 			"new_expires_at", newExpiresAt,
 			"attempt", attempt+1,
 		)
@@ -236,9 +267,10 @@ func (m *tokenManager) doRefresh(ctx context.Context, account *sdk.Account) (map
 	// 重试耗尽：记录错误，但不阻断请求
 	state.lastError = lastErr
 	state.lastErrorAt = time.Now()
-	m.logger.Warn("Token 刷新重试耗尽，使用现有 token",
-		"account_id", account.ID,
-		"error", lastErr,
+	logger.Error("token_refresh_exhausted",
+		sdk.LogFieldAccountID, account.ID,
+		sdk.LogFieldDurationMs, time.Since(refreshStart).Milliseconds(),
+		sdk.LogFieldError, lastErr,
 	)
 	return nil, nil
 }

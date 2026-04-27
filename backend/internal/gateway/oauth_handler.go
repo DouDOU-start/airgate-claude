@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	sdk "github.com/DouDOU-start/airgate-sdk"
 	"github.com/DouDOU-start/airgate-sdk/devserver"
 )
 
@@ -39,7 +39,7 @@ func (h *OAuthDevHandler) handleStart(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.Gateway.StartOAuth()
 	if err != nil {
-		log.Printf("StartOAuth 失败: %v", err)
+		sdk.LoggerFromContext(r.Context()).Error("oauth_start_failed", sdk.LogFieldError, err)
 		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}

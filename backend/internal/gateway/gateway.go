@@ -90,6 +90,23 @@ func (g *AnthropicGateway) Routes() []sdk.RouteDefinition {
 }
 
 func (g *AnthropicGateway) Forward(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
+	// 抽取/生成 request_id 并派生请求级 logger，注入 ctx 供下游使用
+	rid := sdk.ExtractOrGenerateRequestID(req.Headers)
+	logger := sdk.LoggerFromContext(ctx).With(sdk.LogFieldRequestID, rid)
+	if logger == nil {
+		logger = g.logger.With(sdk.LogFieldRequestID, rid)
+	}
+	ctx = sdk.WithLogger(ctx, logger)
+	ctx = sdk.WithRequestID(ctx, rid)
+
+	method := http.MethodPost
+	path := resolveRequestPath(req)
+	logger.Debug("plugin_request_received",
+		sdk.LogFieldMethod, method,
+		sdk.LogFieldPath, path,
+		sdk.LogFieldModel, req.Model,
+		"stream", req.Stream,
+	)
 	return g.forwardHTTP(ctx, req)
 }
 
@@ -546,6 +563,7 @@ func buildCountTokensHeaders(req *http.Request, account *sdk.Account) {
 func (g *AnthropicGateway) forwardCountTokens(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
 	start := time.Now()
 	account := req.Account
+	logger := sdk.LoggerFromContext(ctx)
 
 	targetURL := resolveBaseURL(account.Credentials) + "/v1/messages/count_tokens?beta=true"
 	body := normalizeRequestBody(req.Body)
@@ -553,13 +571,34 @@ func (g *AnthropicGateway) forwardCountTokens(ctx context.Context, req *sdk.Forw
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		reason := fmt.Sprintf("构建上游请求失败: %v", err)
+		logger.Warn("upstream_request_build_failed",
+			sdk.LogFieldAccountID, account.ID,
+			"url", redactURL(targetURL),
+			"op", "count_tokens",
+			sdk.LogFieldError, err,
+		)
 		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
 	buildCountTokensHeaders(upstreamReq, account)
 
+	logger.Debug("upstream_request_start",
+		sdk.LogFieldAccountID, account.ID,
+		sdk.LogFieldModel, req.Model,
+		"url", redactURL(targetURL),
+		sdk.LogFieldMethod, http.MethodPost,
+		"op", "count_tokens",
+	)
+
 	client := g.getHTTPClient(account)
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
+		dur := time.Since(start)
+		logger.Warn("upstream_request_failed",
+			sdk.LogFieldAccountID, account.ID,
+			"op", "count_tokens",
+			sdk.LogFieldDurationMs, dur.Milliseconds(),
+			sdk.LogFieldError, err,
+		)
 		return transientOutcome(err.Error()), fmt.Errorf("请求上游失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -567,6 +606,11 @@ func (g *AnthropicGateway) forwardCountTokens(ctx context.Context, req *sdk.Forw
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		reason := fmt.Sprintf("读取上游响应失败: %v", err)
+		logger.Warn("upstream_response_read_failed",
+			sdk.LogFieldAccountID, account.ID,
+			"op", "count_tokens",
+			sdk.LogFieldError, err,
+		)
 		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
 	if req.Writer != nil {
@@ -581,10 +625,24 @@ func (g *AnthropicGateway) forwardCountTokens(ctx context.Context, req *sdk.Forw
 		if msg == "" {
 			msg = truncate(string(respBody), 200)
 		}
+		logger.Warn("upstream_request_non_2xx",
+			sdk.LogFieldAccountID, account.ID,
+			"op", "count_tokens",
+			sdk.LogFieldStatus, resp.StatusCode,
+			sdk.LogFieldDurationMs, elapsed.Milliseconds(),
+			sdk.LogFieldReason, msg,
+		)
 		outcome := failureOutcome(resp.StatusCode, respBody, resp.Header.Clone(), msg, extractRetryAfterHeader(resp.Header))
 		outcome.Duration = elapsed
 		return outcome, nil
 	}
+	logger.Debug("upstream_request_completed",
+		sdk.LogFieldAccountID, account.ID,
+		"op", "count_tokens",
+		sdk.LogFieldStatus, resp.StatusCode,
+		sdk.LogFieldDurationMs, elapsed.Milliseconds(),
+		"content_length", int64(len(respBody)),
+	)
 	return sdk.ForwardOutcome{
 		Kind:     sdk.OutcomeSuccess,
 		Upstream: sdk.UpstreamResponse{StatusCode: resp.StatusCode, Headers: resp.Header.Clone(), Body: respBody},

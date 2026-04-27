@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ const (
 
 // forwardHTTP 根据请求路径和账号类型分发。
 func (g *AnthropicGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequest) (sdk.ForwardOutcome, error) {
+	logger := sdk.LoggerFromContext(ctx)
 	path := resolveRequestPath(req)
 
 	if path == "/v1/models" {
@@ -49,8 +51,26 @@ func (g *AnthropicGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequ
 		return g.forwardOAuth(ctx, req, path)
 	default:
 		reason := fmt.Sprintf("未知的账号类型: %s", account.Type)
+		logger.Warn("forward_dispatch_failed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldReason, reason,
+			sdk.LogFieldError, reason,
+		)
 		return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
 	}
+}
+
+// redactURL 去掉 query string，仅保留 host+path（避免 ?beta=true 之类敏感参数）
+func redactURL(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil && u != nil {
+		u.RawQuery = ""
+		u.User = nil
+		return u.String()
+	}
+	if idx := strings.Index(rawURL, "?"); idx >= 0 {
+		return rawURL[:idx]
+	}
+	return rawURL
 }
 
 // ──────────────────────────────────────────────────────
@@ -60,6 +80,7 @@ func (g *AnthropicGateway) forwardHTTP(ctx context.Context, req *sdk.ForwardRequ
 func (g *AnthropicGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRequest, path string) (sdk.ForwardOutcome, error) {
 	start := time.Now()
 	account := req.Account
+	logger := sdk.LoggerFromContext(ctx)
 
 	targetURL := resolveBaseURL(account.Credentials) + path
 	body := preprocessBody(req.Body)
@@ -67,20 +88,58 @@ func (g *AnthropicGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRe
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		reason := fmt.Sprintf("构建上游请求失败: %v", err)
+		logger.Warn("upstream_request_build_failed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			"url", redactURL(targetURL),
+			sdk.LogFieldError, err,
+		)
 		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
 	setAnthropicAuthHeaders(upstreamReq, account, req.Headers, req.Model)
 
+	logger.Debug("upstream_request_start",
+		sdk.LogFieldAccountID, account.ID,
+		sdk.LogFieldModel, req.Model,
+		"url", redactURL(targetURL),
+		sdk.LogFieldMethod, http.MethodPost,
+		"stream", req.Stream,
+		"account_type", "apikey",
+	)
+
 	client := g.getHTTPClient(account)
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
+		dur := time.Since(start)
+		logger.Warn("upstream_request_failed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldDurationMs, dur.Milliseconds(),
+			sdk.LogFieldError, err,
+		)
 		return transientOutcome(err.Error()), fmt.Errorf("请求上游失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	dur := time.Since(start)
 	if resp.StatusCode >= 400 {
+		logger.Warn("upstream_request_non_2xx",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldStatus, resp.StatusCode,
+			sdk.LogFieldDurationMs, dur.Milliseconds(),
+		)
 		return handleErrorResponse(resp, req.Writer, start), nil
 	}
+
+	logger.Debug("upstream_request_completed",
+		sdk.LogFieldAccountID, account.ID,
+		sdk.LogFieldModel, req.Model,
+		sdk.LogFieldStatus, resp.StatusCode,
+		sdk.LogFieldDurationMs, dur.Milliseconds(),
+		"content_length", resp.ContentLength,
+		"stream", req.Stream,
+	)
 
 	if req.Stream && req.Writer != nil {
 		return handleStreamResponse(resp, req.Writer, start)
@@ -95,6 +154,7 @@ func (g *AnthropicGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRe
 func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardRequest, path string) (sdk.ForwardOutcome, error) {
 	start := time.Now()
 	account := req.Account
+	logger := sdk.LoggerFromContext(ctx)
 
 	// Claude Code 客户端身份闸：X-Airgate-Plugin-Claude-Claude-Code-Only: true 或
 	// 账号级凭证 claude_code_only=true。
@@ -102,10 +162,10 @@ func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReq
 		strings.EqualFold(account.Credentials["claude_code_only"], "true")
 	if ccOnly {
 		if result := validateClaudeCodeRequest(path, req.Body, req.Headers); !result.OK {
-			g.logger.Info("拒绝非 Claude Code 客户端请求",
-				"account_id", account.ID,
-				"path", path,
-				"reason", result.Reason,
+			logger.Warn("claude_code_only_reject",
+				sdk.LogFieldAccountID, account.ID,
+				sdk.LogFieldPath, path,
+				sdk.LogFieldReason, result.Reason,
 			)
 			return rejectNonCCRequest(req.Writer, result.Reason, start), nil
 		}
@@ -120,6 +180,10 @@ func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReq
 		// token 刷新失败的原因千差万别（refresh_token 吊销 → 账号死；网络抖动 → transient）；
 		// 这里保守按 AccountDead 处理，让核心把账号打 disabled 等待人工介入重新授权。
 		reason := fmt.Sprintf("token 刷新失败: %v", err)
+		logger.Warn("token_ensure_failed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldError, err,
+		)
 		return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
 	}
 	if len(updatedCreds) > 0 && g.sidecar != nil {
@@ -127,6 +191,10 @@ func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReq
 	}
 	if account.Credentials["access_token"] == "" {
 		reason := "OAuth 账号缺少 access_token"
+		logger.Warn("oauth_missing_access_token",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldError, reason,
+		)
 		return accountDeadOutcome(reason), fmt.Errorf("%s", reason)
 	}
 
@@ -138,6 +206,12 @@ func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReq
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
 		reason := fmt.Sprintf("构建上游请求失败: %v", err)
+		logger.Warn("upstream_request_build_failed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			"url", redactURL(targetURL),
+			sdk.LogFieldError, err,
+		)
 		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
 	setAnthropicAuthHeaders(upstreamReq, account, req.Headers, req.Model)
@@ -145,20 +219,52 @@ func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReq
 		setRawHeader(upstreamReq.Header, "x-stainless-helper-method", "stream")
 	}
 
+	logger.Debug("upstream_request_start",
+		sdk.LogFieldAccountID, account.ID,
+		sdk.LogFieldModel, req.Model,
+		"url", redactURL(targetURL),
+		sdk.LogFieldMethod, http.MethodPost,
+		"stream", req.Stream,
+		"account_type", account.Type,
+	)
+
 	client := g.getHTTPClient(account)
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
+		dur := time.Since(start)
+		logger.Warn("upstream_request_failed",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldDurationMs, dur.Milliseconds(),
+			sdk.LogFieldError, err,
+		)
 		return transientOutcome(err.Error()), fmt.Errorf("请求上游失败: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	dur := time.Since(start)
 	if resp.StatusCode >= 400 {
+		logger.Warn("upstream_request_non_2xx",
+			sdk.LogFieldAccountID, account.ID,
+			sdk.LogFieldModel, req.Model,
+			sdk.LogFieldStatus, resp.StatusCode,
+			sdk.LogFieldDurationMs, dur.Milliseconds(),
+		)
 		outcome := handleErrorResponse(resp, req.Writer, start)
 		if len(updatedCreds) > 0 {
 			outcome.UpdatedCredentials = updatedCreds
 		}
 		return outcome, nil
 	}
+
+	logger.Debug("upstream_request_completed",
+		sdk.LogFieldAccountID, account.ID,
+		sdk.LogFieldModel, req.Model,
+		sdk.LogFieldStatus, resp.StatusCode,
+		sdk.LogFieldDurationMs, dur.Milliseconds(),
+		"content_length", resp.ContentLength,
+		"stream", req.Stream,
+	)
 
 	var outcome sdk.ForwardOutcome
 	if req.Stream && req.Writer != nil {
