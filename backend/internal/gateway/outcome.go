@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -26,6 +27,10 @@ func successOutcome(statusCode int, body []byte, headers http.Header, usage *sdk
 // 会保留 Upstream（Body/Headers/StatusCode）供 Core 在 ClientError 路径下透传。
 func failureOutcome(statusCode int, body []byte, headers http.Header, message string, retryAfter time.Duration) sdk.ForwardOutcome {
 	kind := classifyHTTPFailure(statusCode, message)
+	reason := message
+	if reason != "" {
+		reason = fmt.Sprintf("HTTP %d: %s", statusCode, message)
+	}
 	return sdk.ForwardOutcome{
 		Kind: kind,
 		Upstream: sdk.UpstreamResponse{
@@ -33,7 +38,7 @@ func failureOutcome(statusCode int, body []byte, headers http.Header, message st
 			Headers:    headers,
 			Body:       body,
 		},
-		Reason:     message,
+		Reason:     reason,
 		RetryAfter: retryAfter,
 	}
 }
