@@ -2,7 +2,7 @@
 
 id: gateway-claude
 name: Claude 网关
-version: 1.0.0
+version: dev
 description: Claude Messages API 网关
 author: airgate
 type: gateway

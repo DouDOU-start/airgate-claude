@@ -4,8 +4,8 @@ import sdk "github.com/DouDOU-start/airgate-sdk"
 
 //go:generate go run ../../cmd/genmanifest
 
-// PluginVersion 版本号（release 时由 -ldflags 注入 git tag）
-var PluginVersion = "1.0.0"
+// PluginVersion 版本号。默认值是本地开发态，release 时由 -ldflags 注入 git tag。
+var PluginVersion = "dev"
 
 const (
 	PluginID             = "gateway-claude"
