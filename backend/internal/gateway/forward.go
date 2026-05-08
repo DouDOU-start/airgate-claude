@@ -82,8 +82,9 @@ func (g *AnthropicGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRe
 	account := req.Account
 	logger := sdk.LoggerFromContext(ctx)
 
-	targetURL := resolveBaseURL(account.Credentials) + path
+	targetURL := resolveBaseURL(account.Credentials) + path + "?beta=true"
 	body := preprocessBody(req.Body)
+	body = preprocessOAuthBody(body, account)
 
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
@@ -97,6 +98,9 @@ func (g *AnthropicGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRe
 		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
 	setAnthropicAuthHeaders(upstreamReq, account, req.Headers, req.Model)
+	if req.Stream {
+		setRawHeader(upstreamReq.Header, "x-stainless-helper-method", "stream")
+	}
 
 	logger.Debug("upstream_request_start",
 		sdk.LogFieldAccountID, account.ID,
@@ -406,20 +410,21 @@ func preprocessOAuthBody(body []byte, account *sdk.Account) []byte {
 	}
 
 	// 2. 注入 metadata.user_id（如果缺失）
-	//    使用 sticky session：同会话 30 min 内复用同一 user_id，模拟真实 CLI 行为
+	//    CLI >= 2.1.78 使用 JSON 格式；使用 sticky session 30 min 内复用同一 session_id
 	if !gjson.GetBytes(body, "metadata.user_id").Exists() {
 		accountUUID := account.Credentials["account_uuid"]
 		if accountUUID == "" {
-			accountUUID = fmt.Sprintf("%d", account.ID)
+			accountUUID = newUUIDv4()
 		}
 		fingerprint := conversationFingerprint(body)
-		sessionUUID := defaultSessionCache.stickyUserID(account.ID, fingerprint)
-		userID := fmt.Sprintf("user_%s_account_%s_session_%s",
-			newUUIDv4(),
-			accountUUID,
-			sessionUUID,
-		)
-		body, _ = sjson.SetBytes(body, "metadata", map[string]string{"user_id": userID})
+		sessionID := defaultSessionCache.stickyUserID(account.ID, fingerprint)
+		deviceID := newDeviceID(account.ID)
+		userIDJSON, _ := json.Marshal(map[string]string{
+			"device_id":    deviceID,
+			"account_uuid": accountUUID,
+			"session_id":   sessionID,
+		})
+		body, _ = sjson.SetRawBytes(body, "metadata.user_id", userIDJSON)
 	}
 
 	// 3. 确保 tools 字段存在（Claude Code 总是发送 tools，即使为空）

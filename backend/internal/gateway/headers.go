@@ -193,8 +193,7 @@ func setAnthropicAuthHeaders(req *http.Request, account *sdk.Account, clientHead
 	switch account.Type {
 	case "apikey":
 		apiKey := account.Credentials["api_key"]
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-		req.Header.Set("x-api-key", apiKey)
+		setRawHeader(req.Header, "x-api-key", apiKey)
 
 		beta := clientHeaders.Get("anthropic-beta")
 		if beta == "" {
@@ -206,10 +205,8 @@ func setAnthropicAuthHeaders(req *http.Request, account *sdk.Account, clientHead
 		} else {
 			beta = filterDroppedBetas(beta)
 		}
-		req.Header.Set("anthropic-beta", beta)
+		setRawHeader(req.Header, "anthropic-beta", beta)
 
-		// Claude Code 伪装头：部分 API Key 所属组织限制仅 Claude Code 客户端可用，
-		// 统一携带与 OAuth 相同的 DefaultHeaders 以通过上游身份检测。
 		for k, v := range DefaultHeaders {
 			if isRawCaseHeader(k) {
 				setRawHeader(req.Header, k, v)

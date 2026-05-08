@@ -21,6 +21,13 @@ import (
 
 const sessionTTL = 30 * time.Minute
 
+// newDeviceID 生成 64 字符十六进制 device_id（per-account 确定性）
+// 真实 CLI 使用 64-char hex device identifier
+func newDeviceID(accountID int64) string {
+	h := sha256.Sum256([]byte(fmt.Sprintf("airgate-device-%d", accountID)))
+	return fmt.Sprintf("%x", h)
+}
+
 // newUUIDv4 生成符合 RFC 4122 的 UUIDv4 字符串（小写带连字符）
 func newUUIDv4() string {
 	var b [16]byte
