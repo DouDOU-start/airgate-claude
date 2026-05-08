@@ -84,6 +84,9 @@ func (g *AnthropicGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRe
 
 	targetURL := resolveBaseURL(account.Credentials) + path
 	body := preprocessBody(req.Body)
+	// Claude Code 伪装：部分 API Key 所属组织限制仅 Claude Code 客户端可用，
+	// 需要对请求体也做 system prompt / metadata.user_id / tools 注入。
+	body = preprocessOAuthBody(body, account)
 
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
@@ -97,6 +100,9 @@ func (g *AnthropicGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRe
 		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
 	setAnthropicAuthHeaders(upstreamReq, account, req.Headers, req.Model)
+	if req.Stream {
+		setRawHeader(upstreamReq.Header, "x-stainless-helper-method", "stream")
+	}
 
 	logger.Debug("upstream_request_start",
 		sdk.LogFieldAccountID, account.ID,
