@@ -208,6 +208,18 @@ func setAnthropicAuthHeaders(req *http.Request, account *sdk.Account, clientHead
 		}
 		req.Header.Set("anthropic-beta", beta)
 
+		// Claude Code 伪装头：部分 API Key 所属组织限制仅 Claude Code 客户端可用，
+		// 统一携带与 OAuth 相同的 DefaultHeaders 以通过上游身份检测。
+		for k, v := range DefaultHeaders {
+			if isRawCaseHeader(k) {
+				setRawHeader(req.Header, k, v)
+			} else {
+				req.Header.Set(k, v)
+			}
+		}
+		req.Header.Set("X-Stainless-Retry-Count", pickRetryCount())
+		setRawHeader(req.Header, "Accept", "application/json")
+
 	case "oauth", "session_key":
 		token := account.Credentials["access_token"]
 		setRawHeader(req.Header, "authorization", "Bearer "+token)
