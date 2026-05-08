@@ -9,6 +9,7 @@ backend/internal/gateway/webdist/index.js
 
 # Runtime
 tmp/
+*.log
 backend/config.yaml
 backend/config.docker.yaml
 .env
