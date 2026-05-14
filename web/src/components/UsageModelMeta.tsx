@@ -28,7 +28,7 @@ export function UsageModelMeta(props: UsageRecordSurfaceProps) {
 
   return (
     <span
-      className="inline-flex shrink-0 items-center rounded px-1.5 text-[11px] font-semibold leading-4 whitespace-nowrap"
+      className="inline-flex shrink-0 items-center rounded px-1.5 text-[12px] font-semibold leading-4 whitespace-nowrap"
       style={chipStyle(color)}
     >
       {ctx.reasoning_effort}
