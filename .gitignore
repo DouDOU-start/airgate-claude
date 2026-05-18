@@ -24,3 +24,6 @@ backend/go.work.sum
 .idea/
 .vscode/
 *.swp
+
+# Local git attributes
+.gitattributes
