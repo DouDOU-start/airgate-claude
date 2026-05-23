@@ -77,15 +77,9 @@ func handleNonStreamResponse(resp *http.Response, w http.ResponseWriter, start t
 		return transientOutcome(reason), fmt.Errorf("%s", reason)
 	}
 
-	usage := newTokenUsage(gjson.GetBytes(body, "model").String(), tokenUsage{
-		inputTokens:           int(gjson.GetBytes(body, "usage.input_tokens").Int()),
-		outputTokens:          int(gjson.GetBytes(body, "usage.output_tokens").Int()),
-		cachedInputTokens:     int(gjson.GetBytes(body, "usage.cache_read_input_tokens").Int()),
-		cacheCreationTokens:   int(gjson.GetBytes(body, "usage.cache_creation_input_tokens").Int()),
-		cacheCreation5mTokens: int(gjson.GetBytes(body, "usage.cache_creation.ephemeral_5m_input_tokens").Int()),
-		cacheCreation1hTokens: int(gjson.GetBytes(body, "usage.cache_creation.ephemeral_1h_input_tokens").Int()),
-		reasoningOutputTokens: int(gjson.GetBytes(body, "usage.reasoning_output_tokens").Int()),
-	}, time.Since(start).Milliseconds())
+	var tokens tokenUsage
+	applyAnthropicUsageNode(gjson.GetBytes(body, "usage"), &tokens, true)
+	usage := newTokenUsage(gjson.GetBytes(body, "model").String(), tokens, time.Since(start).Milliseconds())
 	fillUsageCost(usage)
 
 	headers := resp.Header.Clone()
@@ -123,20 +117,82 @@ func extractAnthropicUsage(data string, eventType string, usage *sdk.Usage, toke
 	}
 	switch eventType {
 	case "message_start":
-		tokens.inputTokens = int(gjson.Get(data, "message.usage.input_tokens").Int())
-		tokens.cachedInputTokens = int(gjson.Get(data, "message.usage.cache_read_input_tokens").Int())
-		tokens.cacheCreationTokens = int(gjson.Get(data, "message.usage.cache_creation_input_tokens").Int())
-		tokens.cacheCreation5mTokens = int(gjson.Get(data, "message.usage.cache_creation.ephemeral_5m_input_tokens").Int())
-		tokens.cacheCreation1hTokens = int(gjson.Get(data, "message.usage.cache_creation.ephemeral_1h_input_tokens").Int())
 		usage.Model = gjson.Get(data, "message.model").String()
 		setUsageModelAttribute(usage, usage.Model)
-		setUsageTokens(usage, *tokens)
+		if applyAnthropicUsageNode(gjson.Get(data, "message.usage"), tokens, true) {
+			setUsageTokens(usage, *tokens)
+		}
 
 	case "message_delta":
-		tokens.outputTokens = int(gjson.Get(data, "usage.output_tokens").Int())
-		if reasoning := gjson.Get(data, "usage.reasoning_output_tokens"); reasoning.Exists() {
-			tokens.reasoningOutputTokens = int(reasoning.Int())
+		if applyAnthropicUsageNode(gjson.Get(data, "usage"), tokens, false) {
+			setUsageTokens(usage, *tokens)
 		}
-		setUsageTokens(usage, *tokens)
 	}
+}
+
+func applyAnthropicUsageNode(node gjson.Result, tokens *tokenUsage, allowZero bool) bool {
+	if tokens == nil || !node.Exists() {
+		return false
+	}
+	updated := false
+
+	if v := node.Get("input_tokens"); v.Exists() {
+		if allowZero || v.Int() > 0 {
+			tokens.inputTokens = int(v.Int())
+			updated = true
+		}
+	}
+	if v := node.Get("output_tokens"); v.Exists() {
+		if allowZero || v.Int() > 0 {
+			tokens.outputTokens = int(v.Int())
+			updated = true
+		}
+	}
+	if v := node.Get("cache_read_input_tokens"); v.Exists() {
+		if allowZero || v.Int() > 0 {
+			tokens.cachedInputTokens = int(v.Int())
+			updated = true
+		}
+	}
+	if v := node.Get("cache_creation_input_tokens"); v.Exists() {
+		if allowZero || v.Int() > 0 {
+			tokens.cacheCreationTokens = int(v.Int())
+			updated = true
+		}
+	}
+	if v := node.Get("cache_creation.ephemeral_5m_input_tokens"); v.Exists() {
+		if allowZero || v.Int() > 0 {
+			tokens.cacheCreation5mTokens = int(v.Int())
+			updated = true
+		}
+	}
+	if v := node.Get("cache_creation.ephemeral_1h_input_tokens"); v.Exists() {
+		if allowZero || v.Int() > 0 {
+			tokens.cacheCreation1hTokens = int(v.Int())
+			updated = true
+		}
+	}
+	if v := node.Get("reasoning_output_tokens"); v.Exists() {
+		if allowZero || v.Int() > 0 {
+			tokens.reasoningOutputTokens = int(v.Int())
+			updated = true
+		}
+	}
+
+	if tokens.cachedInputTokens == 0 {
+		if v := node.Get("cached_tokens"); v.Exists() && v.Int() > 0 {
+			tokens.cachedInputTokens = int(v.Int())
+			updated = true
+		}
+	}
+	if tokens.cacheCreationTokens == 0 {
+		cc5m := int(node.Get("cache_creation.ephemeral_5m_input_tokens").Int())
+		cc1h := int(node.Get("cache_creation.ephemeral_1h_input_tokens").Int())
+		if cc5m > 0 || cc1h > 0 {
+			tokens.cacheCreationTokens = cc5m + cc1h
+			updated = true
+		}
+	}
+
+	return updated
 }
