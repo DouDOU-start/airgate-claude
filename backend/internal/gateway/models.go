@@ -44,17 +44,6 @@ var modelRegistry = map[string]Spec{
 const (
 	usageCurrencyUSD = "USD"
 
-	usageAttrModel = "model"
-
-	usageMetricInputTokens           = "input_tokens"
-	usageMetricCachedInputTokens     = "cached_input_tokens"
-	usageMetricCacheCreationTokens   = "cache_creation_input_tokens"
-	usageMetricCacheCreation5mTokens = "cache_creation_5m_input_tokens"
-	usageMetricCacheCreation1hTokens = "cache_creation_1h_input_tokens"
-	usageMetricOutputTokens          = "output_tokens"
-	usageMetricReasoningOutputTokens = "reasoning_output_tokens"
-	usageMetricTotalTokens           = "total_tokens"
-
 	usageMetaCacheCreation5mTokens = "claude.cache_creation_5m_tokens"
 	usageMetaCacheCreation1hTokens = "claude.cache_creation_1h_tokens"
 	usageMetaCacheCreation1hPrice  = "claude.cache_creation_1h_price"
@@ -203,33 +192,19 @@ func setUsageTokens(usage *sdk.Usage, tokens tokenUsage) {
 	setUsageMetadataInt(usage, usageMetaCacheCreation1hTokens, tokens.cacheCreation1hTokens)
 }
 
-func usageMetricInt(usage *sdk.Usage, key string) int {
-	return int(usageMetricValue(usage, key))
+func usageCacheCreation5mTokens(usage *sdk.Usage) int {
+	return int(usageMetadataFloat(usage, usageMetaCacheCreation5mTokens))
 }
 
-func usageMetricValue(usage *sdk.Usage, key string) float64 {
+func usageCacheCreation1hTokens(usage *sdk.Usage) int {
+	return int(usageMetadataFloat(usage, usageMetaCacheCreation1hTokens))
+}
+
+func usageTotalTokens(usage *sdk.Usage) int {
 	if usage == nil {
 		return 0
 	}
-	switch key {
-	case usageMetricInputTokens:
-		return float64(usage.InputTokens)
-	case usageMetricCachedInputTokens:
-		return float64(usage.CachedInputTokens)
-	case usageMetricCacheCreationTokens:
-		return float64(usage.CacheCreationTokens)
-	case usageMetricCacheCreation5mTokens:
-		return usageMetadataFloat(usage, usageMetaCacheCreation5mTokens)
-	case usageMetricCacheCreation1hTokens:
-		return usageMetadataFloat(usage, usageMetaCacheCreation1hTokens)
-	case usageMetricOutputTokens:
-		return float64(usage.OutputTokens)
-	case usageMetricReasoningOutputTokens:
-		return float64(usage.ReasoningOutputTokens)
-	case usageMetricTotalTokens:
-		return float64(usage.InputTokens + usage.CachedInputTokens + usage.CacheCreationTokens + usage.OutputTokens)
-	}
-	return 0
+	return usage.InputTokens + usage.CachedInputTokens + usage.CacheCreationTokens + usage.OutputTokens
 }
 
 func setUsageMetadata(usage *sdk.Usage, key, value string) {
@@ -301,12 +276,12 @@ func fillUsageCost(usage *sdk.Usage) {
 	}
 
 	_, spec := LookupModelSpec(usage.Model)
-	inputTokens := usageMetricInt(usage, usageMetricInputTokens)
-	outputTokens := usageMetricInt(usage, usageMetricOutputTokens)
-	cachedInputTokens := usageMetricInt(usage, usageMetricCachedInputTokens)
-	cacheCreationTokens := usageMetricInt(usage, usageMetricCacheCreationTokens)
-	cacheCreation5mTokens := usageMetricInt(usage, usageMetricCacheCreation5mTokens)
-	cacheCreation1hTokens := usageMetricInt(usage, usageMetricCacheCreation1hTokens)
+	inputTokens := usage.InputTokens
+	outputTokens := usage.OutputTokens
+	cachedInputTokens := usage.CachedInputTokens
+	cacheCreationTokens := usage.CacheCreationTokens
+	cacheCreation5mTokens := usageCacheCreation5mTokens(usage)
+	cacheCreation1hTokens := usageCacheCreation1hTokens(usage)
 
 	genericCacheCreationTokens := cacheCreationTokens - cacheCreation5mTokens - cacheCreation1hTokens
 	if genericCacheCreationTokens < 0 {
