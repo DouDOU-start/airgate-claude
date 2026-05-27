@@ -7,9 +7,8 @@ interface UsageRecordLike {
   output_tokens?: number;
   cached_input_tokens?: number;
   cache_creation_tokens?: number;
-  cache_creation_5m_tokens?: number;
-  cache_creation_1h_tokens?: number;
   reasoning_output_tokens?: number;
+  usage_metadata?: Record<string, string>;
 }
 
 const panelStyle: CSSProperties = {
@@ -104,6 +103,17 @@ function recordFromContext(context: UsageRecordSurfaceProps['context']): UsageRe
   return record && typeof record === 'object' ? record as UsageRecordLike : {};
 }
 
+function metadataFromContext(context: UsageRecordSurfaceProps['context'], record: UsageRecordLike): Record<string, string> {
+  const direct = context?.usage_metadata;
+  if (direct && typeof direct === 'object') return direct as Record<string, string>;
+  return record.usage_metadata ?? {};
+}
+
+function metadataNumber(metadata: Record<string, string>, key: string) {
+  const value = Number(metadata[key]);
+  return Number.isFinite(value) ? value : 0;
+}
+
 function formatNumber(value: number) {
   return Number.isInteger(value)
     ? value.toLocaleString()
@@ -132,12 +142,13 @@ function outputTokenValue(reasoningTokens: number, outputTokens: number) {
 
 export function UsageMetricDetail({ context }: UsageRecordSurfaceProps) {
   const record = recordFromContext(context);
+  const metadata = metadataFromContext(context, record);
   const inputTokens = record.input_tokens || 0;
   const outputTokens = record.output_tokens || 0;
   const cacheReadTokens = record.cached_input_tokens || 0;
   const cacheCreationTokens = record.cache_creation_tokens || 0;
-  const cacheCreation5mTokens = record.cache_creation_5m_tokens || 0;
-  const cacheCreation1hTokens = record.cache_creation_1h_tokens || 0;
+  const cacheCreation5mTokens = metadataNumber(metadata, 'claude.cache_creation_5m_tokens');
+  const cacheCreation1hTokens = metadataNumber(metadata, 'claude.cache_creation_1h_tokens');
   const reasoningTokens = record.reasoning_output_tokens || 0;
   const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
 

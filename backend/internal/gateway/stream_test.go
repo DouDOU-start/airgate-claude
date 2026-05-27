@@ -22,12 +22,12 @@ func TestExtractAnthropicUsage_MessageStartFallsBackToCachedTokens(t *testing.T)
 	if usage.Model != "claude-opus-4-7" {
 		t.Fatalf("model = %q, want claude-opus-4-7", usage.Model)
 	}
-	requireUsageMetric(t, usage, usageMetricInputTokens, 12)
-	requireUsageMetric(t, usage, usageMetricCachedInputTokens, 9)
-	requireUsageMetric(t, usage, usageMetricCacheCreationTokens, 7)
-	requireUsageMetric(t, usage, usageMetricCacheCreation5mTokens, 3)
-	requireUsageMetric(t, usage, usageMetricCacheCreation1hTokens, 4)
-	requireUsageMetric(t, usage, usageMetricTotalTokens, 28)
+	requireUsageValue(t, usage, usageMetricInputTokens, 12)
+	requireUsageValue(t, usage, usageMetricCachedInputTokens, 9)
+	requireUsageValue(t, usage, usageMetricCacheCreationTokens, 7)
+	requireUsageValue(t, usage, usageMetricCacheCreation5mTokens, 3)
+	requireUsageValue(t, usage, usageMetricCacheCreation1hTokens, 4)
+	requireUsageValue(t, usage, usageMetricTotalTokens, 28)
 }
 
 func TestExtractAnthropicUsage_MessageDeltaKeepsStartValues(t *testing.T) {
@@ -40,14 +40,14 @@ func TestExtractAnthropicUsage_MessageDeltaKeepsStartValues(t *testing.T) {
 	delta := `{"type":"message_delta","usage":{"input_tokens":0,"output_tokens":1046,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cached_tokens":11,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"reasoning_output_tokens":128}}`
 	extractAnthropicUsage(delta, "message_delta", usage, &tokens)
 
-	requireUsageMetric(t, usage, usageMetricInputTokens, 10)
-	requireUsageMetric(t, usage, usageMetricCachedInputTokens, 6)
-	requireUsageMetric(t, usage, usageMetricCacheCreationTokens, 7)
-	requireUsageMetric(t, usage, usageMetricCacheCreation5mTokens, 3)
-	requireUsageMetric(t, usage, usageMetricCacheCreation1hTokens, 4)
-	requireUsageMetric(t, usage, usageMetricOutputTokens, 1046)
-	requireUsageMetric(t, usage, usageMetricReasoningOutputTokens, 128)
-	requireUsageMetric(t, usage, usageMetricTotalTokens, 1069)
+	requireUsageValue(t, usage, usageMetricInputTokens, 10)
+	requireUsageValue(t, usage, usageMetricCachedInputTokens, 6)
+	requireUsageValue(t, usage, usageMetricCacheCreationTokens, 7)
+	requireUsageValue(t, usage, usageMetricCacheCreation5mTokens, 3)
+	requireUsageValue(t, usage, usageMetricCacheCreation1hTokens, 4)
+	requireUsageValue(t, usage, usageMetricOutputTokens, 1046)
+	requireUsageValue(t, usage, usageMetricReasoningOutputTokens, 128)
+	requireUsageValue(t, usage, usageMetricTotalTokens, 1069)
 }
 
 func TestExtractAnthropicUsage_MessageDeltaFallsBackToCachedTokens(t *testing.T) {
@@ -60,9 +60,9 @@ func TestExtractAnthropicUsage_MessageDeltaFallsBackToCachedTokens(t *testing.T)
 	delta := `{"type":"message_delta","usage":{"output_tokens":42,"cache_read_input_tokens":0,"cached_tokens":11}}`
 	extractAnthropicUsage(delta, "message_delta", usage, &tokens)
 
-	requireUsageMetric(t, usage, usageMetricCachedInputTokens, 11)
-	requireUsageMetric(t, usage, usageMetricOutputTokens, 42)
-	requireUsageMetric(t, usage, usageMetricTotalTokens, 70)
+	requireUsageValue(t, usage, usageMetricCachedInputTokens, 11)
+	requireUsageValue(t, usage, usageMetricOutputTokens, 42)
+	requireUsageValue(t, usage, usageMetricTotalTokens, 70)
 }
 
 func TestHandleNonStreamResponseParsesAnthropicUsageFallbacks(t *testing.T) {
@@ -92,18 +92,18 @@ func TestHandleNonStreamResponseParsesAnthropicUsageFallbacks(t *testing.T) {
 	if usage.Model != "claude-opus-4-7" {
 		t.Fatalf("model = %q, want claude-opus-4-7", usage.Model)
 	}
-	requireUsageMetric(t, usage, usageMetricInputTokens, 123)
-	requireUsageMetric(t, usage, usageMetricCachedInputTokens, 7)
-	requireUsageMetric(t, usage, usageMetricCacheCreationTokens, 7)
-	requireUsageMetric(t, usage, usageMetricCacheCreation5mTokens, 5)
-	requireUsageMetric(t, usage, usageMetricCacheCreation1hTokens, 2)
-	requireUsageMetric(t, usage, usageMetricOutputTokens, 456)
+	requireUsageValue(t, usage, usageMetricInputTokens, 123)
+	requireUsageValue(t, usage, usageMetricCachedInputTokens, 7)
+	requireUsageValue(t, usage, usageMetricCacheCreationTokens, 7)
+	requireUsageValue(t, usage, usageMetricCacheCreation5mTokens, 5)
+	requireUsageValue(t, usage, usageMetricCacheCreation1hTokens, 2)
+	requireUsageValue(t, usage, usageMetricOutputTokens, 456)
 	if diff := usage.AccountCost - 0.01206975; diff < -1e-9 || diff > 1e-9 {
 		t.Fatalf("account cost = %.12f, want %.12f", usage.AccountCost, 0.01206975)
 	}
 }
 
-func requireUsageMetric(t *testing.T, usage *sdk.Usage, key string, want int) {
+func requireUsageValue(t *testing.T, usage *sdk.Usage, key string, want int) {
 	t.Helper()
 	if got := usageMetricInt(usage, key); got != want {
 		t.Fatalf("%s = %d, want %d", key, got, want)

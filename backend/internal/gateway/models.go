@@ -2,8 +2,8 @@ package gateway
 
 import (
 	"encoding/json"
-	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
@@ -55,11 +55,9 @@ const (
 	usageMetricReasoningOutputTokens = "reasoning_output_tokens"
 	usageMetricTotalTokens           = "total_tokens"
 
-	usageCostInput           = "input_tokens"
-	usageCostCachedInput     = "cached_input_tokens"
-	usageCostCacheCreation5m = "cache_creation_5m_input_tokens"
-	usageCostCacheCreation1h = "cache_creation_1h_input_tokens"
-	usageCostOutput          = "output_tokens"
+	usageMetaCacheCreation5mTokens = "claude.cache_creation_5m_tokens"
+	usageMetaCacheCreation1hTokens = "claude.cache_creation_1h_tokens"
+	usageMetaCacheCreation1hPrice  = "claude.cache_creation_1h_price"
 )
 
 // ModelIDOverrides 短名到长名的映射
@@ -188,14 +186,8 @@ func newTokenUsage(modelID string, tokens tokenUsage, firstTokenMs int64) *sdk.U
 		Currency:     usageCurrencyUSD,
 		FirstTokenMs: firstTokenMs,
 	}
-	setUsageModelAttribute(usage, modelID)
 	setUsageTokens(usage, tokens)
 	return usage
-}
-
-func setUsageModelAttribute(usage *sdk.Usage, modelID string) {
-	_ = usage
-	_ = modelID
 }
 
 func setUsageTokens(usage *sdk.Usage, tokens tokenUsage) {
@@ -206,65 +198,9 @@ func setUsageTokens(usage *sdk.Usage, tokens tokenUsage) {
 	usage.OutputTokens = tokens.outputTokens
 	usage.CachedInputTokens = tokens.cachedInputTokens
 	usage.CacheCreationTokens = tokens.cacheCreationTokens
-	usage.CacheCreation5mTokens = tokens.cacheCreation5mTokens
-	usage.CacheCreation1hTokens = tokens.cacheCreation1hTokens
 	usage.ReasoningOutputTokens = tokens.reasoningOutputTokens
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:   usageMetricInputTokens,
-		Label: "输入 Token",
-		Kind:  "token",
-		Unit:  "token",
-		Value: float64(tokens.inputTokens),
-	})
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:   usageMetricCachedInputTokens,
-		Label: "缓存输入 Token",
-		Kind:  "token",
-		Unit:  "token",
-		Value: float64(tokens.cachedInputTokens),
-	})
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:   usageMetricCacheCreationTokens,
-		Label: "缓存写入 Token",
-		Kind:  "token",
-		Unit:  "token",
-		Value: float64(tokens.cacheCreationTokens),
-	})
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:   usageMetricCacheCreation5mTokens,
-		Label: "缓存写入 Token 5m",
-		Kind:  "token",
-		Unit:  "token",
-		Value: float64(tokens.cacheCreation5mTokens),
-	})
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:   usageMetricCacheCreation1hTokens,
-		Label: "缓存写入 Token 1h",
-		Kind:  "token",
-		Unit:  "token",
-		Value: float64(tokens.cacheCreation1hTokens),
-	})
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:   usageMetricOutputTokens,
-		Label: "输出 Token",
-		Kind:  "token",
-		Unit:  "token",
-		Value: float64(tokens.outputTokens),
-	})
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:   usageMetricReasoningOutputTokens,
-		Label: "推理 Token",
-		Kind:  "token",
-		Unit:  "token",
-		Value: float64(tokens.reasoningOutputTokens),
-	})
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:   usageMetricTotalTokens,
-		Label: "总 Token",
-		Kind:  "token",
-		Unit:  "token",
-		Value: float64(tokens.inputTokens + tokens.cachedInputTokens + tokens.cacheCreationTokens + tokens.outputTokens),
-	})
+	setUsageMetadataInt(usage, usageMetaCacheCreation5mTokens, tokens.cacheCreation5mTokens)
+	setUsageMetadataInt(usage, usageMetaCacheCreation1hTokens, tokens.cacheCreation1hTokens)
 }
 
 func usageMetricInt(usage *sdk.Usage, key string) int {
@@ -283,9 +219,9 @@ func usageMetricValue(usage *sdk.Usage, key string) float64 {
 	case usageMetricCacheCreationTokens:
 		return float64(usage.CacheCreationTokens)
 	case usageMetricCacheCreation5mTokens:
-		return float64(usage.CacheCreation5mTokens)
+		return usageMetadataFloat(usage, usageMetaCacheCreation5mTokens)
 	case usageMetricCacheCreation1hTokens:
-		return float64(usage.CacheCreation1hTokens)
+		return usageMetadataFloat(usage, usageMetaCacheCreation1hTokens)
 	case usageMetricOutputTokens:
 		return float64(usage.OutputTokens)
 	case usageMetricReasoningOutputTokens:
@@ -296,48 +232,47 @@ func usageMetricValue(usage *sdk.Usage, key string) float64 {
 	return 0
 }
 
-func setUsageAttribute(usage *sdk.Usage, attr sdk.UsageAttribute) {
-	_ = usage
-	_ = attr
-}
-
-func setUsageMetric(usage *sdk.Usage, metric sdk.UsageMetric) {
-	for i := range usage.Metrics {
-		if usage.Metrics[i].Key == metric.Key {
-			usage.Metrics[i] = metric
-			return
-		}
-	}
-	usage.Metrics = append(usage.Metrics, metric)
-}
-
-func setUsageCostDetail(usage *sdk.Usage, detail sdk.UsageCostDetail) {
-	if detail.AccountCost <= 0 {
-		removeUsageCostDetail(usage, detail.Key)
-		return
-	}
-	for i := range usage.CostDetails {
-		if usage.CostDetails[i].Key == detail.Key {
-			usage.CostDetails[i] = detail
-			recomputeUsageAccountCost(usage)
-			return
-		}
-	}
-	usage.CostDetails = append(usage.CostDetails, detail)
-	recomputeUsageAccountCost(usage)
-}
-
-func removeUsageCostDetail(usage *sdk.Usage, key string) {
+func setUsageMetadata(usage *sdk.Usage, key, value string) {
 	if usage == nil {
 		return
 	}
-	for i := range usage.CostDetails {
-		if usage.CostDetails[i].Key == key {
-			usage.CostDetails = append(usage.CostDetails[:i], usage.CostDetails[i+1:]...)
-			recomputeUsageAccountCost(usage)
-			return
-		}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
 	}
+	if usage.Metadata == nil {
+		usage.Metadata = map[string]string{}
+	}
+	usage.Metadata[key] = value
+}
+
+func setUsageMetadataInt(usage *sdk.Usage, key string, value int) {
+	if value <= 0 {
+		return
+	}
+	setUsageMetadata(usage, key, strconv.Itoa(value))
+}
+
+func setUsageMetadataFloat(usage *sdk.Usage, key string, value float64) {
+	if value <= 0 {
+		return
+	}
+	setUsageMetadata(usage, key, strconv.FormatFloat(value, 'f', -1, 64))
+}
+
+func usageMetadataFloat(usage *sdk.Usage, key string) float64 {
+	if usage == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(usage.Metadata[key])
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0
+	}
+	return value
 }
 
 func recomputeUsageAccountCost(usage *sdk.Usage) {
@@ -358,17 +293,6 @@ func tokenCost(tokens int, pricePerMillion float64) float64 {
 	return float64(tokens) * pricePerMillion / 1_000_000
 }
 
-func priceMetadata(price float64, pricingModel string) map[string]string {
-	metadata := map[string]string{
-		"unit_price": fmt.Sprintf("%.10g", price),
-		"unit":       "USD/1M tokens",
-	}
-	if pricingModel != "" {
-		metadata["pricing_model"] = pricingModel
-	}
-	return metadata
-}
-
 // fillUsageCost 根据 Usage 中的 token 计量和插件私有价格表填充费用。
 // 未知 model 只在计费规格上兜底，Usage.Model 仍保持上游实际返回值。
 func fillUsageCost(usage *sdk.Usage) {
@@ -376,7 +300,7 @@ func fillUsageCost(usage *sdk.Usage) {
 		return
 	}
 
-	pricingModel, spec := LookupModelSpec(usage.Model)
+	_, spec := LookupModelSpec(usage.Model)
 	inputTokens := usageMetricInt(usage, usageMetricInputTokens)
 	outputTokens := usageMetricInt(usage, usageMetricOutputTokens)
 	cachedInputTokens := usageMetricInt(usage, usageMetricCachedInputTokens)
@@ -398,99 +322,14 @@ func fillUsageCost(usage *sdk.Usage) {
 	usage.InputPrice = spec.InputPrice
 	usage.CachedInputPrice = spec.CachedPrice
 	usage.CacheCreationPrice = spec.CacheCreationPrice
-	usage.CacheCreation1hPrice = spec.CacheCreation1hPrice
 	usage.OutputPrice = spec.OutputPrice
 	usage.InputCost = inputCost
 	usage.CachedInputCost = cachedCost
 	usage.CacheCreationCost = cacheCreation5mCost + cacheCreation1hCost
 	usage.OutputCost = outputCost
+	setUsageMetadataFloat(usage, usageMetaCacheCreation1hPrice, spec.CacheCreation1hPrice)
 	recomputeUsageAccountCost(usage)
 
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:         usageMetricInputTokens,
-		Label:       "输入 Token",
-		Kind:        "token",
-		Unit:        "token",
-		Value:       float64(inputTokens),
-		AccountCost: inputCost,
-		Currency:    usageCurrencyUSD,
-		Metadata:    priceMetadata(spec.InputPrice, pricingModel),
-	})
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:         usageMetricCachedInputTokens,
-		Label:       "缓存输入 Token",
-		Kind:        "token",
-		Unit:        "token",
-		Value:       float64(cachedInputTokens),
-		AccountCost: cachedCost,
-		Currency:    usageCurrencyUSD,
-		Metadata:    priceMetadata(spec.CachedPrice, pricingModel),
-	})
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:         usageMetricCacheCreation5mTokens,
-		Label:       "缓存写入 Token 5m",
-		Kind:        "token",
-		Unit:        "token",
-		Value:       float64(billableCacheCreation5mTokens),
-		AccountCost: cacheCreation5mCost,
-		Currency:    usageCurrencyUSD,
-		Metadata:    priceMetadata(spec.CacheCreationPrice, pricingModel),
-	})
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:         usageMetricCacheCreation1hTokens,
-		Label:       "缓存写入 Token 1h",
-		Kind:        "token",
-		Unit:        "token",
-		Value:       float64(cacheCreation1hTokens),
-		AccountCost: cacheCreation1hCost,
-		Currency:    usageCurrencyUSD,
-		Metadata:    priceMetadata(spec.CacheCreation1hPrice, pricingModel),
-	})
-	setUsageMetric(usage, sdk.UsageMetric{
-		Key:         usageMetricOutputTokens,
-		Label:       "输出 Token",
-		Kind:        "token",
-		Unit:        "token",
-		Value:       float64(outputTokens),
-		AccountCost: outputCost,
-		Currency:    usageCurrencyUSD,
-		Metadata:    priceMetadata(spec.OutputPrice, pricingModel),
-	})
-	setUsageCostDetail(usage, sdk.UsageCostDetail{
-		Key:         usageCostInput,
-		Label:       "输入 Token",
-		AccountCost: inputCost,
-		Currency:    usageCurrencyUSD,
-		Metadata:    priceMetadata(spec.InputPrice, pricingModel),
-	})
-	setUsageCostDetail(usage, sdk.UsageCostDetail{
-		Key:         usageCostCachedInput,
-		Label:       "缓存输入 Token",
-		AccountCost: cachedCost,
-		Currency:    usageCurrencyUSD,
-		Metadata:    priceMetadata(spec.CachedPrice, pricingModel),
-	})
-	setUsageCostDetail(usage, sdk.UsageCostDetail{
-		Key:         usageCostCacheCreation5m,
-		Label:       "缓存写入 Token 5m",
-		AccountCost: cacheCreation5mCost,
-		Currency:    usageCurrencyUSD,
-		Metadata:    priceMetadata(spec.CacheCreationPrice, pricingModel),
-	})
-	setUsageCostDetail(usage, sdk.UsageCostDetail{
-		Key:         usageCostCacheCreation1h,
-		Label:       "缓存写入 Token 1h",
-		AccountCost: cacheCreation1hCost,
-		Currency:    usageCurrencyUSD,
-		Metadata:    priceMetadata(spec.CacheCreation1hPrice, pricingModel),
-	})
-	setUsageCostDetail(usage, sdk.UsageCostDetail{
-		Key:         usageCostOutput,
-		Label:       "输出 Token",
-		AccountCost: outputCost,
-		Currency:    usageCurrencyUSD,
-		Metadata:    priceMetadata(spec.OutputPrice, pricingModel),
-	})
 }
 
 // claudeModelListEntry Anthropic /v1/models 接口返回的单个模型

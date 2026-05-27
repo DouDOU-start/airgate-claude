@@ -118,7 +118,6 @@ func extractAnthropicUsage(data string, eventType string, usage *sdk.Usage, toke
 	switch eventType {
 	case "message_start":
 		usage.Model = gjson.Get(data, "message.model").String()
-		setUsageModelAttribute(usage, usage.Model)
 		if applyAnthropicUsageNode(gjson.Get(data, "message.usage"), tokens, true) {
 			setUsageTokens(usage, *tokens)
 		}
