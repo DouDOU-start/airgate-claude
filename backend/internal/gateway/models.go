@@ -194,21 +194,21 @@ func newTokenUsage(modelID string, tokens tokenUsage, firstTokenMs int64) *sdk.U
 }
 
 func setUsageModelAttribute(usage *sdk.Usage, modelID string) {
-	if usage == nil || modelID == "" {
-		return
-	}
-	setUsageAttribute(usage, sdk.UsageAttribute{
-		Key:   usageAttrModel,
-		Label: "模型",
-		Kind:  "model",
-		Value: modelID,
-	})
+	_ = usage
+	_ = modelID
 }
 
 func setUsageTokens(usage *sdk.Usage, tokens tokenUsage) {
 	if usage == nil {
 		return
 	}
+	usage.InputTokens = tokens.inputTokens
+	usage.OutputTokens = tokens.outputTokens
+	usage.CachedInputTokens = tokens.cachedInputTokens
+	usage.CacheCreationTokens = tokens.cacheCreationTokens
+	usage.CacheCreation5mTokens = tokens.cacheCreation5mTokens
+	usage.CacheCreation1hTokens = tokens.cacheCreation1hTokens
+	usage.ReasoningOutputTokens = tokens.reasoningOutputTokens
 	setUsageMetric(usage, sdk.UsageMetric{
 		Key:   usageMetricInputTokens,
 		Label: "输入 Token",
@@ -275,22 +275,30 @@ func usageMetricValue(usage *sdk.Usage, key string) float64 {
 	if usage == nil {
 		return 0
 	}
-	for _, metric := range usage.Metrics {
-		if metric.Key == key {
-			return metric.Value
-		}
+	switch key {
+	case usageMetricInputTokens:
+		return float64(usage.InputTokens)
+	case usageMetricCachedInputTokens:
+		return float64(usage.CachedInputTokens)
+	case usageMetricCacheCreationTokens:
+		return float64(usage.CacheCreationTokens)
+	case usageMetricCacheCreation5mTokens:
+		return float64(usage.CacheCreation5mTokens)
+	case usageMetricCacheCreation1hTokens:
+		return float64(usage.CacheCreation1hTokens)
+	case usageMetricOutputTokens:
+		return float64(usage.OutputTokens)
+	case usageMetricReasoningOutputTokens:
+		return float64(usage.ReasoningOutputTokens)
+	case usageMetricTotalTokens:
+		return float64(usage.InputTokens + usage.CachedInputTokens + usage.CacheCreationTokens + usage.OutputTokens)
 	}
 	return 0
 }
 
 func setUsageAttribute(usage *sdk.Usage, attr sdk.UsageAttribute) {
-	for i := range usage.Attributes {
-		if usage.Attributes[i].Key == attr.Key {
-			usage.Attributes[i] = attr
-			return
-		}
-	}
-	usage.Attributes = append(usage.Attributes, attr)
+	_ = usage
+	_ = attr
 }
 
 func setUsageMetric(usage *sdk.Usage, metric sdk.UsageMetric) {
@@ -336,10 +344,7 @@ func recomputeUsageAccountCost(usage *sdk.Usage) {
 	if usage == nil {
 		return
 	}
-	var total float64
-	for _, detail := range usage.CostDetails {
-		total += detail.AccountCost
-	}
+	total := usage.InputCost + usage.OutputCost + usage.CachedInputCost + usage.CacheCreationCost
 	usage.AccountCost = total
 	if usage.Currency == "" {
 		usage.Currency = usageCurrencyUSD
@@ -390,6 +395,16 @@ func fillUsageCost(usage *sdk.Usage) {
 	cacheCreation5mCost := tokenCost(billableCacheCreation5mTokens, spec.CacheCreationPrice)
 	cacheCreation1hCost := tokenCost(cacheCreation1hTokens, spec.CacheCreation1hPrice)
 	outputCost := tokenCost(outputTokens, spec.OutputPrice)
+	usage.InputPrice = spec.InputPrice
+	usage.CachedInputPrice = spec.CachedPrice
+	usage.CacheCreationPrice = spec.CacheCreationPrice
+	usage.CacheCreation1hPrice = spec.CacheCreation1hPrice
+	usage.OutputPrice = spec.OutputPrice
+	usage.InputCost = inputCost
+	usage.CachedInputCost = cachedCost
+	usage.CacheCreationCost = cacheCreation5mCost + cacheCreation1hCost
+	usage.OutputCost = outputCost
+	recomputeUsageAccountCost(usage)
 
 	setUsageMetric(usage, sdk.UsageMetric{
 		Key:         usageMetricInputTokens,
