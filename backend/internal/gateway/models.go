@@ -21,7 +21,7 @@ type Spec struct {
 	OutputPrice          float64 // 输出价格（$/1M tokens）
 }
 
-// modelRegistry 全局模型注册表（价格对齐 Anthropic 官方 2026-04 定价）
+// modelRegistry 全局模型注册表（价格对齐 Anthropic 官方 2026-05 定价）
 // 字段顺序：Name, ContextWindow, MaxOutputTokens, InputPrice, CachedPrice, CacheCreationPrice, CacheCreation1hPrice, OutputPrice
 // 价格单位：美元 / 百万 token
 // CachedPrice          = Cache Read / Hits & Refreshes（0.1x base input）
@@ -29,6 +29,7 @@ type Spec struct {
 // CacheCreation1hPrice = Cache Write 1h TTL（2.00x base input）
 var modelRegistry = map[string]Spec{
 	// Opus — input $5 / cache_read $0.50 / write_5m $6.25 / write_1h $10 / output $25
+	"claude-opus-4-8":          {"Claude Opus 4.8", 1000000, 128000, 5.0, 0.5, 6.25, 10.0, 25.0},
 	"claude-opus-4-7":          {"Claude Opus 4.7", 1000000, 128000, 5.0, 0.5, 6.25, 10.0, 25.0},
 	"claude-opus-4-6":          {"Claude Opus 4.6", 1000000, 128000, 5.0, 0.5, 6.25, 10.0, 25.0},
 	"claude-opus-4-5-20251101": {"Claude Opus 4.5", 200000, 64000, 5.0, 0.5, 6.25, 10.0, 25.0},
@@ -146,8 +147,8 @@ func LookupModelSpec(modelID string) (string, Spec) {
 	lower := strings.ToLower(modelID)
 	switch {
 	case strings.Contains(lower, "opus"):
-		if spec, ok := modelRegistry["claude-opus-4-7"]; ok {
-			return "claude-opus-4-7", spec
+		if spec, ok := modelRegistry["claude-opus-4-8"]; ok {
+			return "claude-opus-4-8", spec
 		}
 	case strings.Contains(lower, "haiku"):
 		if spec, ok := modelRegistry["claude-haiku-4-5-20251001"]; ok {
@@ -489,6 +490,7 @@ type claudeModelListEntry struct {
 // defaultModelList 默认模型列表（Anthropic API 格式）
 var defaultModelList = []claudeModelListEntry{
 	// Latest
+	{ID: "claude-opus-4-8", Type: "model", DisplayName: "Claude Opus 4.8", CreatedAt: "2026-05-28T00:00:00Z"},
 	{ID: "claude-opus-4-7", Type: "model", DisplayName: "Claude Opus 4.7", CreatedAt: "2026-04-15T00:00:00Z"},
 	{ID: "claude-opus-4-6", Type: "model", DisplayName: "Claude Opus 4.6", CreatedAt: "2026-02-06T00:00:00Z"},
 	{ID: "claude-sonnet-4-6", Type: "model", DisplayName: "Claude Sonnet 4.6", CreatedAt: "2026-02-18T00:00:00Z"},
