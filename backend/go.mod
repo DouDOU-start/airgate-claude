@@ -3,7 +3,7 @@ module github.com/DevilGenius/airgate-claude/backend
 go 1.26.3
 
 require (
-	github.com/DevilGenius/airgate-sdk v0.2.1
+	github.com/DevilGenius/airgate-sdk v0.2.2
 	github.com/imroc/req/v3 v3.57.0
 	github.com/refraction-networking/utls v1.8.2
 	github.com/tidwall/gjson v1.18.0
