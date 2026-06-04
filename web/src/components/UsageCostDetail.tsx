@@ -128,16 +128,30 @@ function stripTokenSuffix(s: string): string {
   return s.replace(/\s*Token\s*$/i, '').replace(/\s*成本\s*$/, '').trim();
 }
 
+function friendlyCostBaseLabel(raw: string): string {
+  const s = raw.trim();
+  const normalized = s.toLowerCase().replace(/[\s-]+/g, '_');
+  if (normalized.includes('cache_creation_5m')) return '缓存写入 5m';
+  if (normalized.includes('cache_creation_1h')) return '缓存写入 1h';
+  if (normalized.includes('cache_creation')) return '缓存写入';
+  if (normalized.includes('cached_input') || normalized.includes('cache_read')) return '缓存读取';
+  if (normalized.includes('input')) return '输入';
+  if (normalized.includes('output')) return '输出';
+  return stripTokenSuffix(s);
+}
+
 function toCostLabel(raw: string): string {
   const s = raw.trim();
   if (s.includes('成本') || s.includes('费用') || s.toLowerCase().includes('cost')) return s;
-  return stripTokenSuffix(s) + '成本';
+  return friendlyCostBaseLabel(s) + '成本';
 }
 
 function toUnitLabel(raw: string): string {
   const s = raw.trim();
   if (s.includes('单价') || s.toLowerCase().includes('price')) return s;
-  return stripTokenSuffix(s) + '单价';
+  const normalized = s.toLowerCase().replace(/[\s-]+/g, '_');
+  if (normalized.includes('cache_creation_5m') || (s.includes('缓存写入') && s.includes('5m'))) return '缓存写入单价（5m TTL）';
+  return friendlyCostBaseLabel(s) + '单价';
 }
 
 function fallbackDetails(record: UsageRecordLike): UsageCostDetailItem[] {
