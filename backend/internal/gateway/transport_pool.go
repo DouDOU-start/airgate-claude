@@ -17,8 +17,8 @@ import (
 // StandardTransportPool API Key 账号的标准 TLS 连接池
 // 按 proxyURL 分组缓存 Transport
 type StandardTransportPool struct {
-	mu    sync.RWMutex
-	pool  map[string]*http.Transport // key = proxyURL (空字符串表示直连)
+	mu     sync.RWMutex
+	pool   map[string]*http.Transport // key = proxyURL (空字符串表示直连)
 	dialer *net.Dialer
 }
 
@@ -52,7 +52,7 @@ func (p *StandardTransportPool) Get(proxyURL string) *http.Transport {
 
 	t := &http.Transport{
 		DialContext:         p.dialer.DialContext,
-		TLSClientConfig:    &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
 		TLSHandshakeTimeout: httpTLSTimeout,
 		MaxIdleConns:        httpMaxIdleConns,
 		MaxIdleConnsPerHost: httpIdleConnsPerHost,

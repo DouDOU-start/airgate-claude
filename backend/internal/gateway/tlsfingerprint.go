@@ -82,20 +82,20 @@ var defaultSignatureAlgorithms = []utls.SignatureScheme{
 // 不应通过人为加 GREASE 打乱 JA3。
 func buildBunClientHelloSpec() *utls.ClientHelloSpec {
 	extensions := []utls.TLSExtension{
-		&utls.SNIExtension{},                                                                            // 0:  server_name
-		&utls.GREASEEncryptedClientHelloExtension{},                                                     // 65037: ECH (boringssl GREASE)
-		&utls.ExtendedMasterSecretExtension{},                                                           // 23
-		&utls.RenegotiationInfoExtension{Renegotiation: utls.RenegotiateOnceAsClient},                   // 65281
-		&utls.SupportedCurvesExtension{Curves: defaultCurves},                                           // 10
-		&utls.SupportedPointsExtension{SupportedPoints: []uint8{0}},                                     // 11 (uncompressed)
-		&utls.SessionTicketExtension{},                                                                  // 35
-		&utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}},                                        // 16
-		&utls.StatusRequestExtension{},                                                                  // 5
-		&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: defaultSignatureAlgorithms},    // 13
-		&utls.SCTExtension{},                                                                            // 18
-		&utls.KeyShareExtension{KeyShares: []utls.KeyShare{{Group: utls.X25519}}},                       // 51
-		&utls.PSKKeyExchangeModesExtension{Modes: []uint8{uint8(utls.PskModeDHE)}},                      // 45
-		&utls.SupportedVersionsExtension{Versions: []uint16{utls.VersionTLS13, utls.VersionTLS12}},      // 43
+		&utls.SNIExtension{},                                                                         // 0:  server_name
+		&utls.GREASEEncryptedClientHelloExtension{},                                                  // 65037: ECH (boringssl GREASE)
+		&utls.ExtendedMasterSecretExtension{},                                                        // 23
+		&utls.RenegotiationInfoExtension{Renegotiation: utls.RenegotiateOnceAsClient},                // 65281
+		&utls.SupportedCurvesExtension{Curves: defaultCurves},                                        // 10
+		&utls.SupportedPointsExtension{SupportedPoints: []uint8{0}},                                  // 11 (uncompressed)
+		&utls.SessionTicketExtension{},                                                               // 35
+		&utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}},                                     // 16
+		&utls.StatusRequestExtension{},                                                               // 5
+		&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: defaultSignatureAlgorithms}, // 13
+		&utls.SCTExtension{},                                                                         // 18
+		&utls.KeyShareExtension{KeyShares: []utls.KeyShare{{Group: utls.X25519}}},                    // 51
+		&utls.PSKKeyExchangeModesExtension{Modes: []uint8{uint8(utls.PskModeDHE)}},                   // 45
+		&utls.SupportedVersionsExtension{Versions: []uint16{utls.VersionTLS13, utls.VersionTLS12}},   // 43
 	}
 
 	return &utls.ClientHelloSpec{

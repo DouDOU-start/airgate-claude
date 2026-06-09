@@ -27,8 +27,8 @@ const (
 	OAuthAuthorizeURL = "https://claude.ai/oauth/authorize"
 	OAuthTokenURL     = "https://platform.claude.com/v1/oauth/token"
 	OAuthRedirectURI  = "https://platform.claude.com/oauth/code/callback"
-	OAuthScopeBrowser   = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
-	OAuthScopeAPI       = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+	OAuthScopeBrowser = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
+	OAuthScopeAPI     = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 
 	// Session Key 通过 claude.ai 获取 org 和 authorization code 的端点
 	claudeAIBaseURL = "https://claude.ai"
@@ -505,4 +505,3 @@ func base64URLEncode(data []byte) string {
 	encoded := base64.URLEncoding.EncodeToString(data)
 	return strings.TrimRight(encoded, "=")
 }
-

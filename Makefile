@@ -69,6 +69,7 @@ lint: ## 代码检查（需要安装 golangci-lint）
 	fi
 	@cd backend && golangci-lint run ./...
 	@cd web && pnpm exec tsc --noEmit
+	@cd web && pnpm lint
 	@echo "代码检查通过"
 
 fmt: ## 格式化代码
@@ -100,11 +101,13 @@ fp-verify: ## 验证当前 spec 未偏离 baseline（CI 用）
 
 # ===================== Git Hooks =====================
 
-setup-hooks: ## 安装 Git pre-commit hook
+setup-hooks: ## 安装 Git hooks（pre-commit + commit-msg）
 	@echo '#!/bin/sh' > .git/hooks/pre-commit
 	@echo 'make pre-commit' >> .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
-	@echo "pre-commit hook 已安装"
+	@cp scripts/commit-msg .git/hooks/commit-msg
+	@chmod +x .git/hooks/commit-msg
+	@echo "Git hooks 已安装（pre-commit + commit-msg）"
 
 # ===================== 清理 =====================
 

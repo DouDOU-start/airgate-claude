@@ -101,7 +101,7 @@ func TestValidateClaudeCodeRequest(t *testing.T) {
 
 func TestDiceCoefficient(t *testing.T) {
 	tests := []struct {
-		a, b  string
+		a, b   string
 		wantGe float64 // 期望 ≥ 此值
 	}{
 		{"You are Claude Code, Anthropic's official CLI for Claude.",

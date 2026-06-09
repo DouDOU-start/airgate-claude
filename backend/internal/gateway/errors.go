@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 	"github.com/tidwall/gjson"
+
+	sdk "github.com/DouDOU-start/airgate-sdk/sdkgo"
 )
 
 // classifyHTTPFailure 根据 HTTP 状态码 + 错误文本归一化为 OutcomeKind。
