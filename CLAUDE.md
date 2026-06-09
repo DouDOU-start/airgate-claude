@@ -11,6 +11,15 @@
 - `plugin.yaml` 由 `make manifest` 生成，不可手改。
 - 前端单 `index.js` → `web/dist/index.js`，用 `@doudou-start/airgate-theme`。
 
+## 混合现状（过渡态）
+
+本仓当前混合了网关 + provider + UI 三层职责：
+
+- **Provider 职责**（应归 provider 插件）：claude.ai OAuth（`oauth.go`/`oauth_handler.go`）、session-key 管理（`session.go`）、uTLS 指纹（`tlsfingerprint.go`）、sidecar（`sidecar.go`）、token 管理（`token_manager.go`）、传输池（`transport_pool.go`）
+- **UI 职责**（应归 UI 插件）：6 个账号 widget
+
+> 新增/改动须按职责归位，勿加深混合。详见 `../airgate-core/docs/architecture/current/plugins.md`。
+
 ## 命令
 
 `make dev`（独立调试）· `make manifest` · `make build` · `make ci` · `make release`
