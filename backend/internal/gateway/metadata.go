@@ -30,6 +30,11 @@ func BuildPluginInfo() sdk.PluginInfo {
 		Description: PluginDescription,
 		Author:      PluginAuthor,
 		Type:        sdk.PluginTypeGateway,
+		// 对外协议为 Anthropic Messages API：Core 写错误时按 Anthropic 错误形态
+		// （{"type":"error","error":{...}}）而非默认的 OpenAI 形态
+		Metadata: map[string]string{
+			"error_format": "anthropic",
+		},
 		AccountTypes: []sdk.AccountType{
 			{
 				Key:         "apikey",
