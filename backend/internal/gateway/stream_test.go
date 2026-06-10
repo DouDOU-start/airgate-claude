@@ -109,3 +109,26 @@ func requireUsageMetric(t *testing.T, usage *sdk.Usage, key string, want int) {
 		t.Fatalf("%s = %d, want %d", key, got, want)
 	}
 }
+
+// TestStreamAbortedOutcomeFillsUsageCost 回归：流中断（上游挂起超时等）时，
+// message_start 已产生的输入/缓存写入 token 上游已实际计费，
+// streamAbortedOutcome 必须补填费用，否则落库为"有 token、金额全 0"的漏计费记录。
+func TestStreamAbortedOutcomeFillsUsageCost(t *testing.T) {
+	usage := newTokenUsage("claude-fable-5", tokenUsage{
+		inputTokens:         2,
+		outputTokens:        53,
+		cacheCreationTokens: 41900,
+	}, 0)
+
+	outcome := streamAbortedOutcome(200, "读取上游 SSE 失败: timeout", usage)
+
+	if outcome.Kind != sdk.OutcomeStreamAborted {
+		t.Fatalf("Kind = %v, want OutcomeStreamAborted", outcome.Kind)
+	}
+	if outcome.Usage == nil {
+		t.Fatal("中断 outcome 应携带 Usage")
+	}
+	if outcome.Usage.AccountCost <= 0 {
+		t.Fatalf("中断前已产生的用量必须计费，AccountCost = %v", outcome.Usage.AccountCost)
+	}
+}

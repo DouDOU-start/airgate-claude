@@ -62,7 +62,11 @@ func accountDeadOutcome(reason string) sdk.ForwardOutcome {
 }
 
 // streamAbortedOutcome 流式响应已开写、中途断开。
+//
+// 中断前已产生的用量（message_start 的输入/缓存写入 token 等）上游已实际计费，
+// 必须在此补填费用，否则会落一条"有 token、金额全 0"的漏计费记录。
 func streamAbortedOutcome(statusCode int, reason string, usage *sdk.Usage) sdk.ForwardOutcome {
+	fillUsageCost(usage)
 	return sdk.ForwardOutcome{
 		Kind: sdk.OutcomeStreamAborted,
 		Upstream: sdk.UpstreamResponse{
