@@ -28,6 +28,8 @@ type Spec struct {
 // CacheCreationPrice   = Cache Write 5m TTL（1.25x base input）
 // CacheCreation1hPrice = Cache Write 1h TTL（2.00x base input）
 var modelRegistry = map[string]Spec{
+	// Fable — input $10 / cache_read $1.00 / write_5m $12.50 / write_1h $20 / output $50
+	"claude-fable-5": {"Claude Fable 5", 1000000, 128000, 10.0, 1.0, 12.5, 20.0, 50.0},
 	// Opus — input $5 / cache_read $0.50 / write_5m $6.25 / write_1h $10 / output $25
 	"claude-opus-4-8":          {"Claude Opus 4.8", 1000000, 128000, 5.0, 0.5, 6.25, 10.0, 25.0},
 	"claude-opus-4-7":          {"Claude Opus 4.7", 1000000, 128000, 5.0, 0.5, 6.25, 10.0, 25.0},
@@ -114,16 +116,16 @@ func AllPricingSpecs() []NamedSpec {
 	return items
 }
 
-// fallbackModel 兜底模型（未知模型按 Sonnet 4.6 计费，最常用的中端模型）
+// fallbackModel 兜底模型（未知模型按 Opus 4.8 计费，避免高价新模型按低价少收）
 var fallbackSpec = Spec{
-	Name:                 "Claude Sonnet 4.6",
+	Name:                 "Claude Opus 4.8",
 	ContextWindow:        1000000,
-	MaxOutputTokens:      64000,
-	InputPrice:           3.0,
-	CachedPrice:          0.3,
-	CacheCreationPrice:   3.75,
-	CacheCreation1hPrice: 6.0,
-	OutputPrice:          15.0,
+	MaxOutputTokens:      128000,
+	InputPrice:           5.0,
+	CachedPrice:          0.5,
+	CacheCreationPrice:   6.25,
+	CacheCreation1hPrice: 10.0,
+	OutputPrice:          25.0,
 }
 
 // LookupModelSpec 查找模型计费规格，未知模型返回兜底规格。
@@ -146,6 +148,10 @@ func LookupModelSpec(modelID string) (string, Spec) {
 	// 关键词匹配（从模型名推断系列）
 	lower := strings.ToLower(modelID)
 	switch {
+	case strings.Contains(lower, "fable"):
+		if spec, ok := modelRegistry["claude-fable-5"]; ok {
+			return "claude-fable-5", spec
+		}
 	case strings.Contains(lower, "opus"):
 		if spec, ok := modelRegistry["claude-opus-4-8"]; ok {
 			return "claude-opus-4-8", spec
@@ -159,8 +165,8 @@ func LookupModelSpec(modelID string) (string, Spec) {
 			return "claude-sonnet-4-6", spec
 		}
 	}
-	// 兜底：按 Sonnet 4.6 计费
-	return "claude-sonnet-4-6", fallbackSpec
+	// 兜底：按 Opus 4.8 计费
+	return "claude-opus-4-8", fallbackSpec
 }
 
 func specToModelInfo(id string, spec Spec) sdk.ModelInfo {
@@ -490,6 +496,7 @@ type claudeModelListEntry struct {
 // defaultModelList 默认模型列表（Anthropic API 格式）
 var defaultModelList = []claudeModelListEntry{
 	// Latest
+	{ID: "claude-fable-5", Type: "model", DisplayName: "Claude Fable 5", CreatedAt: "2026-06-02T00:00:00Z"},
 	{ID: "claude-opus-4-8", Type: "model", DisplayName: "Claude Opus 4.8", CreatedAt: "2026-05-28T00:00:00Z"},
 	{ID: "claude-opus-4-7", Type: "model", DisplayName: "Claude Opus 4.7", CreatedAt: "2026-04-15T00:00:00Z"},
 	{ID: "claude-opus-4-6", Type: "model", DisplayName: "Claude Opus 4.6", CreatedAt: "2026-02-06T00:00:00Z"},
