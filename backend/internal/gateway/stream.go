@@ -16,6 +16,12 @@ import (
 
 // SSE 流式响应透传 + usage 提取。调用者保证 resp.StatusCode 是 2xx（4xx/5xx 由 handleErrorResponse 处理）。
 
+// upstreamSSEMaxLineBytes 是上游 SSE 单行最大字节数。
+// 大工具入参（写大文件 / review 整段代码等）的 input_json_delta 单行可能远超 1 MB，
+// 过小会触发 bufio.Scanner: token too long 中断流 → tool_use 入参被截断 →
+// 客户端报 "Invalid tool parameters"。与 airgate-openai 对齐取 8 MB。
+const upstreamSSEMaxLineBytes = 8 * 1024 * 1024
+
 // handleStreamResponse 透传 Anthropic SSE 流，同时累加 usage 字段。
 // 流中途断开时返回 OutcomeStreamAborted（字节已开写，Core 不会 failover）。
 func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time.Time) (sdk.ForwardOutcome, error) {
@@ -30,7 +36,7 @@ func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time
 	var firstTokenOnce sync.Once
 
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), upstreamSSEMaxLineBytes)
 
 	for scanner.Scan() {
 		line := scanner.Text()

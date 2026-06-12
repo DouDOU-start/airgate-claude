@@ -195,6 +195,10 @@ func setAnthropicAuthHeaders(req *http.Request, account *sdk.Account, clientHead
 		apiKey := account.Credentials["api_key"]
 		setRawHeader(req.Header, "x-api-key", apiKey)
 
+		// API Key 为第一方凭证，无 OAuth 反作弊顾虑：客户端显式声明的 anthropic-beta
+		// 原样透传，不剥离。剥离 context-1m / tool-search-tool / skills 等会让上游行为
+		// 与 Claude Code 预期错位（长上下文 400、工具发现/调用 schema 不一致 → 客户端
+		// "Invalid tool parameters"）。仅当客户端未声明时才补默认组合。
 		beta := clientHeaders.Get("anthropic-beta")
 		if beta == "" {
 			if isHaikuModel(model) {
@@ -202,8 +206,6 @@ func setAnthropicAuthHeaders(req *http.Request, account *sdk.Account, clientHead
 			} else {
 				beta = APIKeyBetaHeader
 			}
-		} else {
-			beta = filterDroppedBetas(beta)
 		}
 		setRawHeader(req.Header, "anthropic-beta", beta)
 
