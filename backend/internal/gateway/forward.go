@@ -83,8 +83,9 @@ func (g *AnthropicGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRe
 	logger := sdk.LoggerFromContext(ctx)
 
 	targetURL := resolveBaseURL(account.Credentials) + path + "?beta=true"
-	body := preprocessBody(req.Body)
-	body = preprocessOAuthBody(body, account)
+	// API Key 为第一方直连凭证：最小化、无损预处理，不做 OAuth 伪装/净化，
+	// 避免破坏 cache_control TTL 顺序、tool_use 前的 thinking 块与反斜杠转义。
+	body := preprocessAPIKeyBody(req.Body)
 
 	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
@@ -345,6 +346,33 @@ func preprocessBody(body []byte) []byte {
 	// 剥离空 text / 非法位置 thinking 块，避免上游 400
 	body = sanitizeBody(body)
 
+	return body
+}
+
+// preprocessAPIKeyBody 对 API Key（第一方 Anthropic 直连凭证）账号做最小化、无损预处理。
+//
+// API Key 不需要 OAuth 反作弊伪装，也不应改写客户端请求体：system / messages /
+// tools / cache_control 一律原样透传。历史上 apikey 路径误用了 preprocessBody +
+// preprocessOAuthBody，会带来三类工具调用故障：
+//   - appendToolsEphemeralCache 给 tools 注入默认 5m cache_control，与客户端
+//     system 上的 1h TTL 冲突（处理顺序 tools→system）→ 上游 400
+//     "ttl='1h' cache_control block must not come after a ttl='5m'"
+//   - sanitizeBody 剥离 tool_use 之前的 thinking 块，破坏 interleaved-thinking +
+//     工具调用的回合结构 → 上游 400
+//   - sanitizeBody / 消息注入对含反斜杠（Windows 路径 C:\\…、正则 \d）的 body 做
+//     json 往返，转义被损坏 → "invalid character ... in string escape code"
+//
+// 这里只做两件转发必需且转义安全的事，其余原样透传：
+//  1. 规范化 model ID（仅替换 model 字段，不触碰其它字符串）
+//  2. 补 max_tokens 默认值（Anthropic 必填；sjson 原地插入，不解码已有字符串）
+func preprocessAPIKeyBody(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	body = normalizeRequestBody(body)
+	if !gjson.GetBytes(body, "max_tokens").Exists() {
+		body, _ = sjson.SetBytes(body, "max_tokens", 4096)
+	}
 	return body
 }
 
