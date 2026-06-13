@@ -126,7 +126,7 @@ func TestSanitizeBody_StripEmptyTextAndMidThinking(t *testing.T) {
 
 	out := sanitizeBody(in)
 	// 第一条 message 的空 text 应被剥离
-	// 第二条 message 的中间 thinking（不在末位）应被剥离
+	// 第二条 message 的中间 thinking 应保留（兼容 interleaved-thinking）
 	got := string(out)
 	if !contains(got, `"text":"hi"`) {
 		t.Errorf("expected 'hi' text to survive; got: %s", got)
@@ -134,8 +134,8 @@ func TestSanitizeBody_StripEmptyTextAndMidThinking(t *testing.T) {
 	if contains(got, `"text":""`) {
 		t.Errorf("expected empty text block to be stripped; got: %s", got)
 	}
-	if contains(got, `"thinking":"..."`) {
-		t.Errorf("expected mid-position thinking block to be stripped; got: %s", got)
+	if !contains(got, `"thinking":"..."`) {
+		t.Errorf("expected mid-position thinking block to be preserved for interleaved-thinking; got: %s", got)
 	}
 }
 

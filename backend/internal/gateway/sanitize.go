@@ -82,14 +82,16 @@ func sanitizeBody(body []byte) []byte {
 
 // filterContentBlocks 对单条 message 的 content 数组做块级过滤
 //
-//	role == "assistant" 且非末位的 thinking 块 → 丢弃
+//	role != "assistant" 的 thinking 块 → 丢弃（非法位置）
+//	role == "assistant" 的 thinking 块 → 保留（兼容 interleaved-thinking beta）
 //	所有位置的空 text 块              → 丢弃
 //	其它块                           → 保留
 //
-// 对 thinking 的保留策略保留真实官方 CLI 行为：assistant 末位可以有 thinking。
+// interleaved-thinking beta 模式下 thinking 可出现在 assistant 消息的任意位置，
+// 不再限制只能在末位。非 assistant 角色的 thinking 块仍为非法，一律剥离。
 func filterContentBlocks(blocks []gjson.Result, role string) []json.RawMessage {
 	out := make([]json.RawMessage, 0, len(blocks))
-	for i, b := range blocks {
+	for _, b := range blocks {
 		t := b.Get("type").String()
 
 		// 空 text 块：所有位置都剥离
@@ -99,16 +101,13 @@ func filterContentBlocks(blocks []gjson.Result, role string) []json.RawMessage {
 			}
 		}
 
-		// thinking 块：assistant 只允许在末位
+		// thinking 块：仅 assistant 角色允许
 		if t == "thinking" || t == "redacted_thinking" {
 			if role != "assistant" {
 				// 非 assistant 角色不应该有 thinking，删掉
 				continue
 			}
-			if i != len(blocks)-1 {
-				// assistant 中间位置的 thinking 上游会 400
-				continue
-			}
+			// assistant 的 thinking 块保留（兼容 interleaved-thinking）
 		}
 
 		out = append(out, json.RawMessage(b.Raw))

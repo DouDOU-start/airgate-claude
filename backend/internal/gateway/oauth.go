@@ -38,6 +38,9 @@ const (
 
 	// OAuth Session TTL
 	oauthSessionTTL = 30 * time.Minute
+
+	// session store 最大容量，防止高频 StartOAuth 攻击导致内存无限增长
+	maxOAuthSessions = 10000
 )
 
 // ──────────────────────────────────────────────────────
@@ -61,9 +64,35 @@ var sessionStore = &oauthSessionStore{
 	sessions: make(map[string]*OAuthSession),
 }
 
+// Set 存储 OAuth 会话。超过容量上限时先清理过期会话，仍超限则淘汰最旧的会话。
 func (s *oauthSessionStore) Set(state string, session *OAuthSession) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if len(s.sessions) >= maxOAuthSessions {
+		// 先清理过期会话
+		for k, v := range s.sessions {
+			if time.Since(v.CreatedAt) > oauthSessionTTL {
+				delete(s.sessions, k)
+			}
+		}
+		// 仍超限：删除最旧的会话，腾出空间
+		for len(s.sessions) >= maxOAuthSessions {
+			var oldestKey string
+			var oldestTime time.Time
+			for k, v := range s.sessions {
+				if oldestKey == "" || v.CreatedAt.Before(oldestTime) {
+					oldestKey = k
+					oldestTime = v.CreatedAt
+				}
+			}
+			if oldestKey == "" {
+				break
+			}
+			delete(s.sessions, oldestKey)
+		}
+	}
+
 	s.sessions[state] = session
 }
 

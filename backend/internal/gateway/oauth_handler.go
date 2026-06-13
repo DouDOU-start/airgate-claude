@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -40,7 +39,7 @@ func (h *OAuthDevHandler) handleStart(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.Gateway.StartOAuth()
 	if err != nil {
 		sdk.LoggerFromContext(r.Context()).Error("oauth_start_failed", sdk.LogFieldError, err)
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		http.Error(w, string(jsonError(err.Error())), http.StatusInternalServerError)
 		return
 	}
 
@@ -82,7 +81,7 @@ func (h *OAuthDevHandler) handleCallback(w http.ResponseWriter, r *http.Request)
 
 	tokenResp, err := h.Gateway.HandleOAuthCallback(r.Context(), code, state, raw.ProxyURL)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		http.Error(w, string(jsonError(err.Error())), http.StatusInternalServerError)
 		return
 	}
 
@@ -130,7 +129,7 @@ func (h *OAuthDevHandler) handleRefresh(w http.ResponseWriter, r *http.Request) 
 
 	tokenResp, err := h.Gateway.RefreshToken(r.Context(), raw.RefreshToken, raw.ProxyURL)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		http.Error(w, string(jsonError(err.Error())), http.StatusInternalServerError)
 		return
 	}
 
@@ -164,7 +163,7 @@ func (h *OAuthDevHandler) handleCookieAuth(w http.ResponseWriter, r *http.Reques
 	accountType := "oauth"
 	tokenResp, err := h.Gateway.ExchangeSessionKeyForToken(r.Context(), raw.SessionKey, raw.ProxyURL)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		http.Error(w, string(jsonError(err.Error())), http.StatusInternalServerError)
 		return
 	}
 
@@ -275,7 +274,7 @@ func (h *OAuthDevHandler) handleUsage(w http.ResponseWriter, r *http.Request) {
 
 	usageResp, err := h.Gateway.fetchUsage(context.Background(), accessToken, account.Credentials["proxy_url"])
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusInternalServerError)
+		http.Error(w, string(jsonError(err.Error())), http.StatusInternalServerError)
 		return
 	}
 
