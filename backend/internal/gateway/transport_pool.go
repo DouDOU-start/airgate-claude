@@ -133,8 +133,10 @@ func (p *FingerprintTransportPool) Close() {
 	p.pool = make(map[string]*http.Transport)
 }
 
-// getHTTPClient 根据账号类型从连接池获取 HTTP Client
-func getHTTPClient(stdPool *StandardTransportPool, fpPool *FingerprintTransportPool, accountID int64, accountType, proxyURL, tlsProfile string) *http.Client {
+// getHTTPClient 根据账号类型从连接池获取 HTTP Client。
+// totalTimeout 为整次请求的总超时；传 0 表示不设总超时（流式专用：避免仍在持续
+// 输出的长响应被"总耗时"掐断，改由首字节计时器 + 读空闲守卫判活）。
+func getHTTPClient(stdPool *StandardTransportPool, fpPool *FingerprintTransportPool, accountID int64, accountType, proxyURL, tlsProfile string, totalTimeout time.Duration) *http.Client {
 	var transport http.RoundTripper
 	switch accountType {
 	case "oauth", "session_key":
@@ -163,7 +165,7 @@ func getHTTPClient(stdPool *StandardTransportPool, fpPool *FingerprintTransportP
 	}
 
 	return &http.Client{
-		Timeout:   httpTimeout,
+		Timeout:   totalTimeout,
 		Transport: transport,
 	}
 }

@@ -19,12 +19,18 @@ import (
 
 const (
 	defaultBaseURL       = "https://api.anthropic.com"
-	httpTimeout          = 3 * time.Minute // 对齐 CC 2.1.112 X-Stainless-Timeout=300
 	httpDialTimeout      = 30 * time.Second
 	httpTLSTimeout       = 15 * time.Second
 	httpIdleTimeout      = 90 * time.Second
 	httpMaxIdleConns     = 100
 	httpIdleConnsPerHost = 20
+
+	// 流式超时模型（详见 doUpstreamAndDispatch / handleStreamResponse）：
+	// 流一旦开始就不按"总耗时"掐断，只在"等首响应头过久"或"流中途持续静默"时中止。
+	// 三者均可经插件 config 覆盖：default_timeout / first_byte_timeout / stream_idle_timeout。
+	defaultNonStreamTotalTimeout = 300 * time.Second // 非流式总超时（无渐进输出，可按总时长封顶；对齐 X-Stainless-Timeout=300）
+	defaultFirstByteTimeout      = 60 * time.Second  // 流式等首响应头上限（头到即解除，不波及 body 读取）
+	defaultStreamIdleTimeout     = 60 * time.Second  // 流式读空闲上限：连续此时长无任何新数据才判定卡死中止
 )
 
 // ──────────────────────────────────────────────────────
@@ -112,8 +118,37 @@ func (g *AnthropicGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRe
 		"account_type", "apikey",
 	)
 
-	client := g.getHTTPClient(account)
+	return g.doUpstreamAndDispatch(ctx, upstreamReq, req, start)
+}
+
+// doUpstreamAndDispatch 发起上游请求并按流式/非流式分发，统一管理超时。
+//
+// 超时模型：
+//   - 非流式：复用 client 的总超时（nonStreamTotalTimeout）。
+//   - 流式：client 不设总超时；仅用首字节计时器约束"等首响应头"阶段（头到即解除）。
+//     此阶段超时尚未写出任何字节，归 transient（Core 可 failover）；进入 body 读取后
+//     改由 handleStreamResponse 内的读空闲守卫判活——流持续输出就不掐断，连续静默超
+//     stream_idle_timeout 才中止。
+//   - 客户端断开：经请求 ctx 立即传播。
+func (g *AnthropicGateway) doUpstreamAndDispatch(ctx context.Context, upstreamReq *http.Request, req *sdk.ForwardRequest, start time.Time) (sdk.ForwardOutcome, error) {
+	account := req.Account
+	logger := sdk.LoggerFromContext(ctx)
+
+	reqCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	upstreamReq = upstreamReq.WithContext(reqCtx)
+
+	// 流式：仅约束"建连 + 等首响应头"阶段；拿到响应头即解除，不波及 body 流式读取。
+	var firstByteTimer *time.Timer
+	if req.Stream {
+		firstByteTimer = time.AfterFunc(g.firstByteTimeout(), cancel)
+	}
+
+	client := g.getHTTPClient(account, req.Stream)
 	resp, err := client.Do(upstreamReq)
+	if firstByteTimer != nil {
+		firstByteTimer.Stop()
+	}
 	if err != nil {
 		dur := time.Since(start)
 		logger.Warn("upstream_request_failed",
@@ -147,7 +182,7 @@ func (g *AnthropicGateway) forwardAPIKey(ctx context.Context, req *sdk.ForwardRe
 	)
 
 	if req.Stream && req.Writer != nil {
-		return handleStreamResponse(resp, req.Writer, start)
+		return handleStreamResponse(resp, req.Writer, start, g.streamIdleTimeout(), cancel)
 	}
 	return handleNonStreamResponse(resp, req.Writer, start)
 }
@@ -233,50 +268,7 @@ func (g *AnthropicGateway) forwardOAuth(ctx context.Context, req *sdk.ForwardReq
 		"account_type", account.Type,
 	)
 
-	client := g.getHTTPClient(account)
-	resp, err := client.Do(upstreamReq)
-	if err != nil {
-		dur := time.Since(start)
-		logger.Warn("upstream_request_failed",
-			sdk.LogFieldAccountID, account.ID,
-			sdk.LogFieldModel, req.Model,
-			sdk.LogFieldDurationMs, dur.Milliseconds(),
-			sdk.LogFieldError, err,
-		)
-		return transientOutcome(err.Error()), fmt.Errorf("请求上游失败: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	dur := time.Since(start)
-	if resp.StatusCode >= 400 {
-		logger.Warn("upstream_request_non_2xx",
-			sdk.LogFieldAccountID, account.ID,
-			sdk.LogFieldModel, req.Model,
-			sdk.LogFieldStatus, resp.StatusCode,
-			sdk.LogFieldDurationMs, dur.Milliseconds(),
-		)
-		outcome := handleErrorResponse(resp, req.Writer, start)
-		if len(updatedCreds) > 0 {
-			outcome.UpdatedCredentials = updatedCreds
-		}
-		return outcome, nil
-	}
-
-	logger.Debug("upstream_request_completed",
-		sdk.LogFieldAccountID, account.ID,
-		sdk.LogFieldModel, req.Model,
-		sdk.LogFieldStatus, resp.StatusCode,
-		sdk.LogFieldDurationMs, dur.Milliseconds(),
-		"content_length", resp.ContentLength,
-		"stream", req.Stream,
-	)
-
-	var outcome sdk.ForwardOutcome
-	if req.Stream && req.Writer != nil {
-		outcome, err = handleStreamResponse(resp, req.Writer, start)
-	} else {
-		outcome, err = handleNonStreamResponse(resp, req.Writer, start)
-	}
+	outcome, err := g.doUpstreamAndDispatch(ctx, upstreamReq, req, start)
 	if len(updatedCreds) > 0 {
 		outcome.UpdatedCredentials = updatedCreds
 	}
@@ -548,7 +540,39 @@ func rejectNonCCRequest(_ http.ResponseWriter, reason string, start time.Time) s
 	}
 }
 
-// getHTTPClient 从连接池获取 HTTP 客户端（按账号 ID + tls_profile 分桶）
-func (g *AnthropicGateway) getHTTPClient(account *sdk.Account) *http.Client {
-	return getHTTPClient(g.stdPool, g.fpPool, account.ID, account.Type, account.ProxyURL, account.Credentials["tls_profile"])
+// getHTTPClient 从连接池获取 HTTP 客户端（按账号 ID + tls_profile 分桶）。
+// stream=true 时不设总超时（Timeout=0）：流式由首字节计时器 + 读空闲守卫判活，
+// 避免仍在持续输出的长响应被"总耗时"掐断。
+func (g *AnthropicGateway) getHTTPClient(account *sdk.Account, stream bool) *http.Client {
+	total := g.nonStreamTotalTimeout()
+	if stream {
+		total = 0
+	}
+	return getHTTPClient(g.stdPool, g.fpPool, account.ID, account.Type, account.ProxyURL, account.Credentials["tls_profile"], total)
+}
+
+// durationConfig 从插件 config 读取时长配置，缺失或非正值时回退默认。
+func (g *AnthropicGateway) durationConfig(key string, fallback time.Duration) time.Duration {
+	if g == nil || g.ctx == nil || g.ctx.Config() == nil {
+		return fallback
+	}
+	if d := g.ctx.Config().GetDuration(key); d > 0 {
+		return d
+	}
+	return fallback
+}
+
+// nonStreamTotalTimeout 非流式请求总超时（可经 config default_timeout 覆盖）。
+func (g *AnthropicGateway) nonStreamTotalTimeout() time.Duration {
+	return g.durationConfig("default_timeout", defaultNonStreamTotalTimeout)
+}
+
+// firstByteTimeout 流式等首响应头上限（可经 config first_byte_timeout 覆盖）。
+func (g *AnthropicGateway) firstByteTimeout() time.Duration {
+	return g.durationConfig("first_byte_timeout", defaultFirstByteTimeout)
+}
+
+// streamIdleTimeout 流式读空闲上限（可经 config stream_idle_timeout 覆盖）。
+func (g *AnthropicGateway) streamIdleTimeout() time.Duration {
+	return g.durationConfig("stream_idle_timeout", defaultStreamIdleTimeout)
 }

@@ -589,7 +589,7 @@ func (g *AnthropicGateway) forwardCountTokens(ctx context.Context, req *sdk.Forw
 		"op", "count_tokens",
 	)
 
-	client := g.getHTTPClient(account)
+	client := g.getHTTPClient(account, false)
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
 		dur := time.Since(start)

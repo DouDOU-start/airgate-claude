@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -107,6 +108,122 @@ func requireUsageMetric(t *testing.T, usage *sdk.Usage, key string, want int) {
 	t.Helper()
 	if got := usageMetricInt(usage, key); got != want {
 		t.Fatalf("%s = %d, want %d", key, got, want)
+	}
+}
+
+// fakeStreamBody 用 channel 模拟上游响应体：每次 Read 阻塞直到有数据或 ctx 取消，
+// 行为对齐真实 net 连接——请求 ctx 取消时 Read 立即返回 ctx 错误。
+type fakeStreamBody struct {
+	ctx context.Context
+	ch  chan []byte
+	buf []byte
+}
+
+func (b *fakeStreamBody) Read(p []byte) (int, error) {
+	for len(b.buf) == 0 {
+		select {
+		case <-b.ctx.Done():
+			return 0, b.ctx.Err()
+		case chunk, ok := <-b.ch:
+			if !ok {
+				return 0, io.EOF
+			}
+			b.buf = chunk
+		}
+	}
+	n := copy(p, b.buf)
+	b.buf = b.buf[n:]
+	return n, nil
+}
+
+func (b *fakeStreamBody) Close() error { return nil }
+
+type streamResult struct {
+	outcome sdk.ForwardOutcome
+	err     error
+}
+
+// TestHandleStreamResponse_ActiveLongStreamNotAborted 回归：只要上游持续吐字节，
+// 即便总耗时超过 idle 阈值也不应被读空闲守卫掐断（流一旦开始就别因"耗时长"中止）。
+func TestHandleStreamResponse_ActiveLongStreamNotAborted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	body := &fakeStreamBody{ctx: ctx, ch: make(chan []byte, 1)}
+	resp := &http.Response{StatusCode: 200, Body: body}
+	rec := httptest.NewRecorder()
+
+	const idle = 250 * time.Millisecond
+	const chunks = 10
+	const interval = 40 * time.Millisecond // 间隔远小于 idle，持续输出
+
+	go func() {
+		for i := 0; i < chunks; i++ {
+			time.Sleep(interval)
+			body.ch <- []byte("data: {\"type\":\"content_block_delta\"}\n\n")
+		}
+		close(body.ch) // 正常收尾 → EOF
+	}()
+
+	done := make(chan streamResult, 1)
+	go func() {
+		o, e := handleStreamResponse(resp, rec, time.Now(), idle, cancel)
+		done <- streamResult{o, e}
+	}()
+
+	select {
+	case r := <-done:
+		// 活跃时长(~400ms) > idle(250ms)，但每次间隔 << idle，不应被掐断
+		if r.err != nil {
+			t.Fatalf("活跃长流被误判中断: err=%v reason=%s", r.err, r.outcome.Reason)
+		}
+		if r.outcome.Kind != sdk.OutcomeSuccess {
+			t.Fatalf("Kind = %v, want OutcomeSuccess", r.outcome.Kind)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleStreamResponse 未在预期时间内返回")
+	}
+}
+
+// TestHandleStreamResponse_StalledStreamAborted 回归：上游持续静默超过 idle（真正卡死）
+// 时，读空闲守卫应取消上游 ctx 并中止，返回 OutcomeStreamAborted。
+func TestHandleStreamResponse_StalledStreamAborted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	body := &fakeStreamBody{ctx: ctx, ch: make(chan []byte, 2)}
+	resp := &http.Response{StatusCode: 200, Body: body}
+	rec := httptest.NewRecorder()
+
+	const idle = 80 * time.Millisecond
+
+	// 先发两条，随后彻底静默（既不发也不关闭）→ 触发读空闲中止
+	body.ch <- []byte("data: {\"type\":\"message_start\"}\n\n")
+	body.ch <- []byte("data: {\"type\":\"content_block_delta\"}\n\n")
+
+	done := make(chan streamResult, 1)
+	startedAt := time.Now()
+	go func() {
+		o, e := handleStreamResponse(resp, rec, time.Now(), idle, cancel)
+		done <- streamResult{o, e}
+	}()
+
+	select {
+	case r := <-done:
+		if r.err == nil {
+			t.Fatal("卡死流应返回错误")
+		}
+		if r.outcome.Kind != sdk.OutcomeStreamAborted {
+			t.Fatalf("Kind = %v, want OutcomeStreamAborted", r.outcome.Kind)
+		}
+		if !strings.Contains(r.outcome.Reason, "卡死") {
+			t.Fatalf("reason 应标注卡死中止，实际: %s", r.outcome.Reason)
+		}
+		if elapsed := time.Since(startedAt); elapsed > time.Second {
+			t.Fatalf("卡死检测耗时过长: %v", elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("卡死流未被中止")
 	}
 }
 

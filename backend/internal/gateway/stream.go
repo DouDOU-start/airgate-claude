@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,9 +23,75 @@ import (
 // 客户端报 "Invalid tool parameters"。与 airgate-openai 对齐取 8 MB。
 const upstreamSSEMaxLineBytes = 8 * 1024 * 1024
 
+// stallGuardReader 包装上游响应体，实现"读空闲"判活：只要持续读到字节就续命，
+// 仅当连续 idle 时长内没有任何新数据时才取消上游请求 ctx，使阻塞中的读取立即返回。
+// 目的：中断"真正卡死"的流，但绝不打断仍在持续输出的长响应（流耗时再长也不掐断）。
+type stallGuardReader struct {
+	rc     io.Reader
+	cancel context.CancelFunc
+	idle   time.Duration
+
+	mu      sync.Mutex
+	timer   *time.Timer
+	stalled bool
+	stopped bool
+}
+
+// newStallGuardReader 创建读空闲守卫。idle <= 0 时不启用（退化为透明包装）。
+func newStallGuardReader(rc io.Reader, idle time.Duration, cancel context.CancelFunc) *stallGuardReader {
+	g := &stallGuardReader{rc: rc, cancel: cancel, idle: idle}
+	if idle > 0 && cancel != nil {
+		g.timer = time.AfterFunc(idle, g.onIdle)
+	}
+	return g
+}
+
+func (g *stallGuardReader) onIdle() {
+	g.mu.Lock()
+	if g.stopped {
+		g.mu.Unlock()
+		return
+	}
+	g.stalled = true
+	g.mu.Unlock()
+	g.cancel()
+}
+
+func (g *stallGuardReader) Read(p []byte) (int, error) {
+	n, err := g.rc.Read(p)
+	if n > 0 {
+		g.mu.Lock()
+		if g.timer != nil && !g.stopped && !g.stalled {
+			g.timer.Reset(g.idle)
+		}
+		g.mu.Unlock()
+	}
+	return n, err
+}
+
+// stalledFlag 报告是否因读空闲超时主动中止（用于区分 reason 文案）。
+func (g *stallGuardReader) stalledFlag() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.stalled
+}
+
+// stop 解除守卫（流读完或函数返回时调用），停止计时器避免泄漏。
+func (g *stallGuardReader) stop() {
+	g.mu.Lock()
+	g.stopped = true
+	g.mu.Unlock()
+	if g.timer != nil {
+		g.timer.Stop()
+	}
+}
+
 // handleStreamResponse 透传 Anthropic SSE 流，同时累加 usage 字段。
-// 流中途断开时返回 OutcomeStreamAborted（字节已开写，Core 不会 failover）。
-func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time.Time) (sdk.ForwardOutcome, error) {
+//
+// 超时语义：流式不按"总耗时"掐断——只要上游持续吐字节就一直透传；仅当连续 idle 时长
+// 内无任何新数据（真正卡死）才经 cancel 中止。流中途断开返回 OutcomeStreamAborted
+// （字节已开写，Core 不会 failover）。
+func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time.Time, idle time.Duration, cancel context.CancelFunc) (sdk.ForwardOutcome, error) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -35,7 +102,10 @@ func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time
 	var tokens tokenUsage
 	var firstTokenOnce sync.Once
 
-	scanner := bufio.NewScanner(resp.Body)
+	guard := newStallGuardReader(resp.Body, idle, cancel)
+	defer guard.stop()
+
+	scanner := bufio.NewScanner(guard)
 	scanner.Buffer(make([]byte, 64*1024), upstreamSSEMaxLineBytes)
 
 	for scanner.Scan() {
@@ -63,7 +133,11 @@ func handleStreamResponse(resp *http.Response, w http.ResponseWriter, start time
 
 	elapsed := time.Since(start)
 	if err := scanner.Err(); err != nil {
-		return streamAbortedOutcome(resp.StatusCode, err.Error(), usage), fmt.Errorf("读取上游 SSE 失败: %w", err)
+		reason := err.Error()
+		if guard.stalledFlag() {
+			reason = fmt.Sprintf("上游流连续 %s 无数据，判定卡死中止: %v", idle, err)
+		}
+		return streamAbortedOutcome(resp.StatusCode, reason, usage), fmt.Errorf("读取上游 SSE 失败: %w", err)
 	}
 
 	fillUsageCost(usage)
