@@ -47,8 +47,9 @@ type sessionEntry struct {
 
 // sessionCache accountID+conversation 指纹 → 固定 user_id
 type sessionCache struct {
-	mu      sync.Mutex
-	entries map[string]sessionEntry
+	mu        sync.Mutex
+	entries   map[string]sessionEntry
+	accessCnt int
 }
 
 var defaultSessionCache = &sessionCache{entries: make(map[string]sessionEntry)}
@@ -86,8 +87,10 @@ func (c *sessionCache) stickyUserID(accountID int64, fingerprint string) string 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 清理过期项（低频访问时顺带 GC）
-	if len(c.entries) > 1024 {
+	// 每 64 次访问清理一次过期项，不等堆到 1024
+	c.accessCnt++
+	if c.accessCnt >= 64 {
+		c.accessCnt = 0
 		for k, e := range c.entries {
 			if now.After(e.expiresAt) {
 				delete(c.entries, k)

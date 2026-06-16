@@ -21,19 +21,23 @@ const (
 	refreshCooldown     = 60 * time.Second // 已知失败的冷却窗口
 	maxRefreshRetries   = 2                // 最大重试次数
 	refreshRetryBackoff = 1 * time.Second  // 重试退避间隔
+	staleStateTTL       = 2 * time.Hour    // 无活动超过此时间的刷新状态自动淘汰
 )
 
 // tokenManager 管理 OAuth token 的并发安全刷新
 type tokenManager struct {
-	gateway *AnthropicGateway
-	logger  *slog.Logger
-	locks   sync.Map // accountID (int64) -> *accountRefreshState
+	gateway   *AnthropicGateway
+	logger    *slog.Logger
+	locks     sync.Map // accountID (int64) -> *accountRefreshState
+	accessCnt int64
+	cleanMu   sync.Mutex
 }
 
 // accountRefreshState 单个账号的刷新状态
 type accountRefreshState struct {
 	mu            sync.Mutex
 	lastRefreshAt time.Time
+	lastAccessAt  time.Time
 	lastToken     string // 上次刷新后的 access_token（用于 double-check）
 	lastError     error
 	lastErrorAt   time.Time
@@ -49,8 +53,35 @@ func newTokenManager(gw *AnthropicGateway, logger *slog.Logger) *tokenManager {
 
 // getState 获取或创建账号的刷新状态
 func (m *tokenManager) getState(accountID int64) *accountRefreshState {
-	val, _ := m.locks.LoadOrStore(accountID, &accountRefreshState{})
-	return val.(*accountRefreshState)
+	val, _ := m.locks.LoadOrStore(accountID, &accountRefreshState{lastAccessAt: time.Now()})
+	state := val.(*accountRefreshState)
+	state.lastAccessAt = time.Now()
+
+	// 每 256 次访问触发一轮清理
+	m.cleanMu.Lock()
+	m.accessCnt++
+	needClean := m.accessCnt >= 256
+	if needClean {
+		m.accessCnt = 0
+	}
+	m.cleanMu.Unlock()
+	if needClean {
+		m.cleanStaleStates()
+	}
+
+	return state
+}
+
+// cleanStaleStates 淘汰长时间未访问的刷新状态
+func (m *tokenManager) cleanStaleStates() {
+	cutoff := time.Now().Add(-staleStateTTL)
+	m.locks.Range(func(key, value any) bool {
+		s := value.(*accountRefreshState)
+		if s.lastAccessAt.Before(cutoff) {
+			m.locks.Delete(key)
+		}
+		return true
+	})
 }
 
 // ensureValidToken 检查 token 过期状态，必要时自动刷新
@@ -217,8 +248,7 @@ func (m *tokenManager) doRefresh(ctx context.Context, account *sdk.Account) (map
 					"attempt", attempt+1,
 					sdk.LogFieldReason, "non_retryable",
 				)
-				// 不阻断请求，使用现有 token（匹配 sub2api Claude 策略）
-				return nil, nil
+				return nil, fmt.Errorf("token 刷新不可重试: %w", err)
 			}
 
 			logger.Warn("token_refresh_retry",
@@ -264,7 +294,7 @@ func (m *tokenManager) doRefresh(ctx context.Context, account *sdk.Account) (map
 		return updated, nil
 	}
 
-	// 重试耗尽：记录错误，但不阻断请求
+	// 重试耗尽：返回错误，让 forwardOAuth 走 accountDead 通道
 	state.lastError = lastErr
 	state.lastErrorAt = time.Now()
 	logger.Error("token_refresh_exhausted",
@@ -272,7 +302,7 @@ func (m *tokenManager) doRefresh(ctx context.Context, account *sdk.Account) (map
 		sdk.LogFieldDurationMs, time.Since(refreshStart).Milliseconds(),
 		sdk.LogFieldError, lastErr,
 	)
-	return nil, nil
+	return nil, fmt.Errorf("token 刷新重试耗尽: %w", lastErr)
 }
 
 // isNonRetryableRefreshError 判断刷新错误是否不可重试

@@ -301,15 +301,18 @@ func (g *AnthropicGateway) handleModelsRequest(req *sdk.ForwardRequest) sdk.Forw
 // 工具函数
 // ──────────────────────────────────────────────────────
 
-// resolveRequestPath 从请求头中提取原始路径
+// resolveRequestPath 从请求头中提取原始请求路径。
+// Core 在 buildPluginRequest 中设置 X-Forwarded-Path（与 OpenAI 插件一致）。
 func resolveRequestPath(req *sdk.ForwardRequest) string {
-	// Core 透传请求时可能在 X-Original-Path 头中保留原始路径
-	if path := req.Headers.Get("X-Original-Path"); path != "" {
-		return path
+	for _, key := range []string{
+		"X-Forwarded-Path",
+		"X-Original-Path",
+	} {
+		if path := req.Headers.Get(key); path != "" {
+			return path
+		}
 	}
-	// 回退：根据请求体检测
 	if len(req.Body) > 0 {
-		// 有 body 的 POST 请求默认走 /v1/messages
 		return "/v1/messages"
 	}
 	return "/v1/models"

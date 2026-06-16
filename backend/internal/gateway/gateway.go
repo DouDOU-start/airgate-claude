@@ -136,11 +136,9 @@ func (g *AnthropicGateway) ValidateAccount(ctx context.Context, credentials map[
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", DefaultAnthropicVersion)
 
-		client := &http.Client{Timeout: 30 * time.Second}
-		if proxyURL := credentials["proxy_url"]; proxyURL != "" {
-			if u, err := url.Parse(proxyURL); err == nil {
-				client.Transport = &http.Transport{Proxy: http.ProxyURL(u)}
-			}
+		client := &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: g.stdPool.Get(credentials["proxy_url"]),
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -509,7 +507,7 @@ func (g *AnthropicGateway) fetchUsage(ctx context.Context, accessToken, proxyURL
 	// 使用 TLS 指纹客户端（api.anthropic.com 用 Claude CLI 指纹）
 	client := &http.Client{
 		Timeout:   30 * time.Second,
-		Transport: buildFingerprintTransport(proxyURL),
+		Transport: g.fpPool.Get(0, proxyURL, ""),
 	}
 
 	resp, err := client.Do(httpReq)
@@ -539,7 +537,6 @@ func buildCountTokensHeaders(req *http.Request, account *sdk.Account) {
 	switch account.Type {
 	case "apikey":
 		apiKey := account.Credentials["api_key"]
-		req.Header.Set("Authorization", "Bearer "+apiKey)
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-beta", APIKeyBetaHeader+","+BetaTokenCounting)
 	case "oauth", "session_key":

@@ -238,11 +238,25 @@ func dialThroughProxy(ctx context.Context, proxyURL string, targetAddr string, d
 		if err != nil {
 			return nil, fmt.Errorf("create SOCKS5 dialer: %w", err)
 		}
-		conn, err := socksDialer.Dial("tcp", targetAddr)
-		if err != nil {
-			return nil, fmt.Errorf("SOCKS5 connect: %w", err)
+		// proxy.Dialer.Dial 不支持 context，用 goroutine + context 包装
+		type dialResult struct {
+			conn net.Conn
+			err  error
 		}
-		return conn, nil
+		ch := make(chan dialResult, 1)
+		go func() {
+			conn, err := socksDialer.Dial("tcp", targetAddr)
+			ch <- dialResult{conn, err}
+		}()
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("SOCKS5 connect canceled: %w", ctx.Err())
+		case r := <-ch:
+			if r.err != nil {
+				return nil, fmt.Errorf("SOCKS5 connect: %w", r.err)
+			}
+			return r.conn, nil
+		}
 	}
 
 	// HTTP CONNECT

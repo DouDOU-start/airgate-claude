@@ -192,32 +192,31 @@ func isHaikuModel(model string) bool {
 func setAnthropicAuthHeaders(req *http.Request, account *sdk.Account, clientHeaders http.Header, model string) {
 	switch account.Type {
 	case "apikey":
+		// API Key 为第一方直连凭证：透传客户端原始请求头，不做 CLI 伪装。
+		// 客户端的 User-Agent / X-Stainless-* / Accept 等原样到达上游，
+		// 保持与直连 Anthropic 一致的指纹，避免干扰 prompt cache 等服务端行为。
+		for k, v := range clientHeaders {
+			lower := strings.ToLower(k)
+			if strings.HasPrefix(lower, "x-airgate-") ||
+				strings.HasPrefix(lower, "x-forwarded-") ||
+				strings.HasPrefix(lower, "x-original-") ||
+				lower == "host" || lower == "content-length" {
+				continue
+			}
+			req.Header[k] = v
+		}
+
 		apiKey := account.Credentials["api_key"]
 		setRawHeader(req.Header, "x-api-key", apiKey)
 
-		// API Key 为第一方凭证，无 OAuth 反作弊顾虑：客户端显式声明的 anthropic-beta
-		// 原样透传，不剥离。剥离 context-1m / tool-search-tool / skills 等会让上游行为
-		// 与 Claude Code 预期错位（长上下文 400、工具发现/调用 schema 不一致 → 客户端
-		// "Invalid tool parameters"）。仅当客户端未声明时才补默认组合。
-		beta := clientHeaders.Get("anthropic-beta")
-		if beta == "" {
+		// 客户端显式声明的 anthropic-beta 已在上面拷贝中设置；未发时补默认组合
+		if clientHeaders.Get("anthropic-beta") == "" {
 			if isHaikuModel(model) {
-				beta = APIKeyHaikuBetaHeader
+				setRawHeader(req.Header, "anthropic-beta", APIKeyHaikuBetaHeader)
 			} else {
-				beta = APIKeyBetaHeader
+				setRawHeader(req.Header, "anthropic-beta", APIKeyBetaHeader)
 			}
 		}
-		setRawHeader(req.Header, "anthropic-beta", beta)
-
-		for k, v := range DefaultHeaders {
-			if isRawCaseHeader(k) {
-				setRawHeader(req.Header, k, v)
-			} else {
-				req.Header.Set(k, v)
-			}
-		}
-		req.Header.Set("X-Stainless-Retry-Count", pickRetryCount())
-		setRawHeader(req.Header, "Accept", "application/json")
 
 	case "oauth", "session_key":
 		token := account.Credentials["access_token"]
