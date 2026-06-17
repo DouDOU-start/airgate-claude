@@ -469,7 +469,7 @@ export function AccountForm({
     ...inputStyle,
     cursor: disabled ? 'not-allowed' : 'pointer',
     backgroundColor: cssVar('primary'),
-    color: 'white',
+    color: cssVar('primaryForeground'),
     border: 'none',
     fontWeight: 500,
     width: 'auto',
