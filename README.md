@@ -13,7 +13,7 @@
 
 AirGate Anthropic 是 [airgate-core](https://github.com/DouDOU-start/airgate-core) 的 Claude 网关插件，基于 [airgate-sdk](https://github.com/DouDOU-start/airgate-sdk) 构建。它以 gRPC 子进程方式运行，负责将 Claude Messages API 请求转发到 Anthropic 上游，支持多种认证方式和连接池复用。
 
-## 核心特性
+## ✨ 核心特性
 
 - **四种账号类型** — `apikey`（标准 API Key）、`oauth`（完整 scope 浏览器授权）、`setup_token`（仅推理 scope，1 年有效期）、`session_key`（claude.ai Cookie 自动换取 OAuth Token）
 - **全类型自定义 Base URL** — 所有账号类型均支持自定义 API 地址，适用于反向代理或企业私有部署
@@ -25,7 +25,7 @@ AirGate Anthropic 是 [airgate-core](https://github.com/DouDOU-start/airgate-cor
 - **Console 批量导入** — 支持通过 Session Key 批量一键创建 OAuth/Setup Token 账号
 - **完整前端 Widget** — 四种账号类型的表单面板，OAuth 授权引导、Session Key 一键获取、状态展示
 
-## 接入位置
+## 🧩 接入位置
 
 ```text
                   +--------------------------------------+
@@ -65,7 +65,7 @@ AirGate Anthropic 是 [airgate-core](https://github.com/DouDOU-start/airgate-cor
                                         fillCost()     Core 更新账号
 ```
 
-## 路由
+## 🚦 路由
 
 由 `metadata.go` 声明，core 启动时自动注册到网关：
 
@@ -75,7 +75,7 @@ AirGate Anthropic 是 [airgate-core](https://github.com/DouDOU-start/airgate-cor
 | POST | `/v1/messages/count_tokens` | Token 计数 |
 | GET  | `/v1/models` | 模型列表（硬编码） |
 
-## 账号类型
+## 🔑 账号类型
 
 | Key | 标签 | 凭证字段 | 适用场景 |
 |---|---|---|---|
@@ -104,7 +104,7 @@ AirGate Anthropic 是 [airgate-core](https://github.com/DouDOU-start/airgate-cor
 - 可重试错误最多 2 次指数退避重试
 - 刷新失败不阻断请求，使用现有 token 继续转发
 
-## 插件自定义端点
+## 🔌 插件自定义端点
 
 通过 `HandleRequest` 暴露给 Core，Core 透传到插件：
 
@@ -117,7 +117,7 @@ AirGate Anthropic 是 [airgate-core](https://github.com/DouDOU-start/airgate-cor
 | `console/batch-cookie-auth` | 批量 Session Key 导入 |
 | `usage/accounts` | 批量查询账号 5h/7d 用量 |
 
-## 模型
+## 🧮 模型
 
 | 模型 ID | 上下文 | 最大输出 | 输入价格 | 缓存价格 | 输出价格 |
 |---------|--------|---------|---------|---------|---------|
@@ -133,7 +133,7 @@ AirGate Anthropic 是 [airgate-core](https://github.com/DouDOU-start/airgate-cor
 
 价格单位：美元 / 百万 token。短名称自动规范化（如 `claude-sonnet-4-5` -> `claude-sonnet-4-5-20250929`）。
 
-## 技术栈
+## 🛠 技术栈
 
 | 层 | 技术 |
 |---|---|
@@ -142,7 +142,7 @@ AirGate Anthropic 是 [airgate-core](https://github.com/DouDOU-start/airgate-cor
 | 插件协议 | hashicorp/go-plugin (gRPC) |
 | 上游协议 | Anthropic Messages API · Anthropic OAuth |
 
-## 安装与开发
+## 🚀 安装与开发
 
 ### 方式 1：安装到 core（推荐）
 
@@ -185,7 +185,7 @@ cd backend && go run ./cmd/devserver   # 启动本地 devserver（模拟 core）
 
 DevServer 提供完整的 OAuth/Console 端点，可独立测试授权流程和请求转发。
 
-## 项目结构
+## 🏗 项目结构
 
 ```text
 airgate-claude/
@@ -214,7 +214,7 @@ airgate-claude/
 └── README.md
 ```
 
-## 设计要点
+## 🔧 设计要点
 
 - **`metadata.go` 是运行时真相** — 账号类型、路由、模型列表全从此派生，`plugin.yaml` 仅为分发产物
 - **Token 刷新安全** — per-account mutex + double-check + 不可重试错误分类（移植自 sub2api 的 `OAuthRefreshAPI` 模式）
@@ -223,8 +223,23 @@ airgate-claude/
 - **成本计算在插件内完成** — `fillCost()` 写入通用 Usage 指标和费用明细，Core 只做倍率乘法不关心模型定价
 - **组织选择逻辑** — 多组织时优先选 `raven_type == "team"` 的组织（对齐 sub2api）
 
-## 相关项目
+## 📦 发版
+
+正式发版**只需要打 git tag，不要手工改版本号字段**：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+`release.yml` 会自动矩阵构建 4 个平台二进制（linux/darwin × amd64/arm64），通过 ldflags 把 git tag（去掉 `v` 前缀）注入二进制，上传到 GitHub Release；airgate-core 插件市场经 GitHub API 自动同步新版本。
+
+## 🤝 相关项目
 
 - [airgate-core](https://github.com/DouDOU-start/airgate-core) — 核心网关（账号调度、计费、管理后台）
 - [airgate-sdk](https://github.com/DouDOU-start/airgate-sdk) — 插件 SDK
 - [airgate-openai](https://github.com/DouDOU-start/airgate-openai) — OpenAI 网关插件（参考实现）
+
+## 📜 License
+
+MIT — 详见 [LICENSE](LICENSE)。
